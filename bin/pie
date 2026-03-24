@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Config
+SANDBOX_MOUNTS=(~/.pi ~/.config:ro)
+IMAGE_NAME="dotpi-sandbox:latest"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DOCKERFILE="$SCRIPT_DIR/Dockerfile.sandbox"
+
+# Derive sandbox root from git/jj or fall back to cwd
+sandbox_root() {
+    git rev-parse --show-toplevel 2>/dev/null \
+        || jj workspace root 2>/dev/null \
+        || pwd
+}
+
+sandbox_name() {
+    echo "shell-$(basename "$(sandbox_root)")"
+}
+
+# Commands
+
+cmd_sandbox_info() {
+    echo "sandbox-root: $(sandbox_root)"
+    echo "sandbox-name: $(sandbox_name)"
+}
+
+cmd_sandbox_build() {
+    docker build -f "$DOCKERFILE" -t "$IMAGE_NAME" "$SCRIPT_DIR"
+}
+
+cmd_sandbox_create() {
+    local name mounts
+    name=$(sandbox_name)
+    mounts=("${SANDBOX_MOUNTS[@]}")
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -m|--mount) mounts+=("$2"); shift 2 ;;
+            *) echo "Unknown option: $1"; exit 1 ;;
+        esac
+    done
+    docker sandbox stop "$name" 2>/dev/null || true
+    docker sandbox rm "$name" 2>/dev/null || true
+    docker sandbox create -t "$IMAGE_NAME" shell "$(sandbox_root)" "${mounts[@]}"
+}
+
+cmd_sandbox_destroy() {
+    local name
+    name=$(sandbox_name)
+    docker sandbox stop "$name"
+    docker sandbox rm "$name"
+}
+
+cmd_sandbox_run() {
+    docker sandbox run "$(sandbox_name)" "$@"
+}
+
+cmd_sandbox() {
+    local name
+    name=$(sandbox_name)
+
+    # Check if image needs (re)building
+    local needs_create=false
+    local image_id
+    image_id=$(docker images -q "$IMAGE_NAME" 2>/dev/null)
+    if [ -z "$image_id" ]; then
+        echo "Image not found, building..."
+        cmd_sandbox_build
+        needs_create=true
+    else
+        local image_created image_ts dockerfile_ts
+        image_created=$(docker inspect "$IMAGE_NAME" | grep -m1 '"Created"' | cut -d'"' -f4)
+        image_ts=$(date -jf "%Y-%m-%dT%H:%M:%S" "$(echo "$image_created" | cut -d. -f1)" +%s 2>/dev/null || date -d "$image_created" +%s)
+        dockerfile_ts=$(stat -f %m "$DOCKERFILE" 2>/dev/null || stat -c %Y "$DOCKERFILE")
+        if [ "$dockerfile_ts" -gt "$image_ts" ]; then
+            echo "Dockerfile changed, rebuilding..."
+            cmd_sandbox_build
+            needs_create=true
+        fi
+    fi
+
+    # Check if sandbox needs to be (re)created
+    if [ "$needs_create" = true ] || ! docker sandbox ls 2>/dev/null | grep -q "$name"; then
+        echo "Creating sandbox..."
+        cmd_sandbox_create
+    fi
+
+    # Run it
+    cmd_sandbox_run "$@"
+}
+
+cmd_help() {
+    cat <<EOF
+pie — pi environment manager
+
+Usage: pie <command> [args...]
+
+Commands:
+    sandbox           Smart launch: build/create/run as needed
+    sandbox-info      Show resolved sandbox name and root
+    sandbox-build     Build the sandbox Docker image
+    sandbox-create    Create a new sandbox (removes existing first)
+                      -m, --mount <path>  Add extra mount (repeatable)
+    sandbox-destroy   Stop and remove the sandbox
+    sandbox-run       Launch an existing sandbox
+    help              Show this help
+EOF
+}
+
+# Dispatch
+case "${1:-help}" in
+    sandbox)        shift; cmd_sandbox "$@" ;;
+    sandbox-info)   cmd_sandbox_info ;;
+    sandbox-build)  cmd_sandbox_build ;;
+    sandbox-create) shift; cmd_sandbox_create "$@" ;;
+    sandbox-destroy) cmd_sandbox_destroy ;;
+    sandbox-run)    shift; cmd_sandbox_run "$@" ;;
+    help|--help|-h) cmd_help ;;
+    *)              echo "Unknown command: $1"; cmd_help; exit 1 ;;
+esac
