@@ -1,0 +1,172 @@
+#!/bin/bash
+
+# _h - CLI helper script that uses pi to provide contextual help for command-line tools
+# Usage: 
+#   _h !!                           # Interactive help for last command
+#   _h "sed 's/foo/bar/'"          # Interactive help for specific command  
+#   _h --ask "question" !!         # Interactive help with specific question
+#   _h --run !! / _h -r !!         # Non-interactive, just run the suggested command
+
+set -e
+
+SCRIPT_NAME="_h"
+PI_COMMAND="pi"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+show_help() {
+    cat << EOF
+${SCRIPT_NAME} - CLI helper using pi for command-line tool assistance
+
+Usage:
+  ${SCRIPT_NAME} [OPTIONS] COMMAND
+  ${SCRIPT_NAME} [OPTIONS] !!
+
+Options:
+  --ask QUESTION, -a QUESTION    Ask a specific question about the command
+  --run, -r                      Non-interactive mode, just run suggested command
+  --help, -h                     Show this help message
+
+Examples:
+  ${SCRIPT_NAME} !!                              # Help for last command
+  ${SCRIPT_NAME} sed 's/foo/bar/'               # Help for sed command  
+  ${SCRIPT_NAME} --ask "in-place editing" !!    # Specific question about last command
+  ${SCRIPT_NAME} --run !!                       # Just run the suggested command
+  ${SCRIPT_NAME} -r git commit -m "fix bug"     # Help with git commit
+
+The script uses pi to look up documentation and provide contextual help for CLI tools.
+EOF
+}
+
+# Parse arguments
+ASK_QUESTION=""
+RUN_MODE=false
+COMMAND_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --ask|-a)
+            ASK_QUESTION="$2"
+            shift 2
+            ;;
+        --run|-r)
+            RUN_MODE=true
+            shift
+            ;;
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        -*)
+            echo -e "${RED}Error: Unknown option $1${NC}" >&2
+            show_help >&2
+            exit 1
+            ;;
+        *)
+            # Collect all remaining arguments as the command
+            COMMAND_ARGS=("$@")
+            break
+            ;;
+    esac
+done
+
+# Join all command arguments into a single string
+COMMAND="${COMMAND_ARGS[*]}"
+
+# Handle history expansion for !!
+if [[ "$COMMAND" == "!!" ]] || [[ "$COMMAND" =~ !! ]]; then
+    # Get the last command from history and expand any !! in the command
+    EXPANDED_COMMAND=$(history -p "$COMMAND" 2>/dev/null)
+    if [[ -n "$EXPANDED_COMMAND" && "$EXPANDED_COMMAND" != "$COMMAND" ]]; then
+        COMMAND="$EXPANDED_COMMAND"
+    elif [[ "$COMMAND" == "!!" ]]; then
+        # Fallback: try to get last command directly
+        LAST_CMD=$(fc -ln -1 2>/dev/null | sed 's/^[ \t]*//')
+        if [[ -n "$LAST_CMD" && "$LAST_CMD" != *"_h"* ]]; then
+            COMMAND="$LAST_CMD"
+        else
+            echo -e "${RED}Error: Could not retrieve last command from history${NC}" >&2
+            exit 1
+        fi
+    fi
+fi
+
+if [[ -z "$COMMAND" ]]; then
+    echo -e "${RED}Error: No command provided${NC}" >&2
+    show_help >&2
+    exit 1
+fi
+
+# Extract the main tool/command from the command line
+TOOL=$(echo "$COMMAND" | awk '{print $1}')
+
+# Detect OS for platform-specific syntax
+OS_INFO=""
+if [[ "$(uname)" == "Darwin" ]]; then
+    OS_INFO=" (macOS syntax required)"
+elif [[ "$(uname)" == "Linux" ]]; then
+    OS_INFO=" (Linux syntax)"
+fi
+
+# Create the prompt for pi
+if [[ -n "$ASK_QUESTION" ]]; then
+    PROMPT="Command: \`$COMMAND\`
+Question: $ASK_QUESTION
+OS: $(uname)$OS_INFO
+
+Show the corrected command only. Be terse."
+else
+    PROMPT="Command: \`$COMMAND\`
+OS: $(uname)$OS_INFO
+
+Show the corrected command with proper syntax/flags. Be terse."
+fi
+
+if [[ "$RUN_MODE" == true ]]; then
+    # Non-interactive mode - get suggestion and optionally run it
+    echo -e "${BLUE}Getting help for: ${NC}$COMMAND"
+    echo -e "${BLUE}Using pi to look up $TOOL documentation...${NC}"
+    echo
+    
+    # Use pi's non-interactive mode to get a suggestion
+    RUN_PROMPT="$PROMPT
+
+Reply with only the corrected command. No explanation."
+    
+    SUGGESTED_OUTPUT=$($PI_COMMAND --tools read,bash --thinking low --print "$RUN_PROMPT" 2>/dev/null)
+    
+    # Extract the suggested command (look for code blocks or commands starting with the tool name)
+    SUGGESTED_CMD=$(echo "$SUGGESTED_OUTPUT" | grep -E "^\`?$TOOL" | head -1 | sed 's/^`//; s/`$//')
+    
+    if [[ -z "$SUGGESTED_CMD" ]]; then
+        # Try to find any command in backticks
+        SUGGESTED_CMD=$(echo "$SUGGESTED_OUTPUT" | grep -oE '`[^`]+`' | head -1 | sed 's/`//g')
+    fi
+    
+    if [[ -z "$SUGGESTED_CMD" ]]; then
+        echo -e "${YELLOW}Could not extract a clear command suggestion. Here's the full response:${NC}"
+        echo "$SUGGESTED_OUTPUT"
+    else
+        echo -e "${GREEN}Suggested command:${NC} $SUGGESTED_CMD"
+        echo
+        read -p "Run this command? [y/N] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${BLUE}Running:${NC} $SUGGESTED_CMD"
+            eval "$SUGGESTED_CMD"
+        fi
+    fi
+else
+    # Interactive mode - start pi with the prompt
+    echo -e "${BLUE}Starting pi session for help with:${NC} $COMMAND"
+    echo -e "${BLUE}Tool:${NC} $TOOL"
+    echo
+    
+    # Run pi interactively with the initial prompt
+    $PI_COMMAND --tools read,bash --thinking low "$PROMPT"
+fi
