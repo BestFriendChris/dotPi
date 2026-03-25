@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # Config
-SANDBOX_MOUNTS=(~/.pi ~/.config:ro)
+SANDBOX_MOUNTS=(~/.pi ~/.config)
 IMAGE_NAME="dotpi-sandbox:latest"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DOCKERFILE="$SCRIPT_DIR/Dockerfile.sandbox"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+SANDBOX_DIR="$SCRIPT_DIR/sandbox"
+DOCKERFILE="$SANDBOX_DIR/Dockerfile"
 
 # Derive sandbox root from git/jj or fall back to cwd
 sandbox_root() {
@@ -15,7 +16,7 @@ sandbox_root() {
 }
 
 sandbox_name() {
-    echo "shell-$(basename "$(sandbox_root)")"
+    echo "pi-$(basename "$(sandbox_root)")"
 }
 
 # Commands
@@ -26,7 +27,7 @@ cmd_sandbox_info() {
 }
 
 cmd_sandbox_build() {
-    docker build -f "$DOCKERFILE" -t "$IMAGE_NAME" "$SCRIPT_DIR"
+    docker build -f "$DOCKERFILE" -t "$IMAGE_NAME" "$SANDBOX_DIR"
 }
 
 cmd_sandbox_create() {
@@ -41,7 +42,7 @@ cmd_sandbox_create() {
     done
     docker sandbox stop "$name" 2>/dev/null || true
     docker sandbox rm "$name" 2>/dev/null || true
-    docker sandbox create -t "$IMAGE_NAME" shell "$(sandbox_root)" "${mounts[@]}"
+    docker sandbox create --name "$name" -t "$IMAGE_NAME" shell "$(sandbox_root)" "${mounts[@]}"
 }
 
 cmd_sandbox_destroy() {
@@ -61,21 +62,32 @@ cmd_sandbox() {
 
     # Check if image needs (re)building
     local needs_create=false
-    local image_id
-    image_id=$(docker images -q "$IMAGE_NAME" 2>/dev/null)
-    if [ -z "$image_id" ]; then
+    local old_image_id
+    old_image_id=$(docker images -q "$IMAGE_NAME" 2>/dev/null)
+    if [ -z "$old_image_id" ]; then
         echo "Image not found, building..."
         cmd_sandbox_build
         needs_create=true
     else
         local image_created image_ts dockerfile_ts
         image_created=$(docker inspect "$IMAGE_NAME" | grep -m1 '"Created"' | cut -d'"' -f4)
-        image_ts=$(date -jf "%Y-%m-%dT%H:%M:%S" "$(echo "$image_created" | cut -d. -f1)" +%s 2>/dev/null || date -d "$image_created" +%s)
-        dockerfile_ts=$(stat -f %m "$DOCKERFILE" 2>/dev/null || stat -c %Y "$DOCKERFILE")
+        image_ts=$(date -jf "%Y-%m-%dT%H:%M:%S" "$(echo "$image_created" | cut -d. -f1)" +%s)
+        # Use the newest mtime of Dockerfile and any COPY'd files as the build timestamp
+        dockerfile_ts=$(stat -f %m "$DOCKERFILE")
+        for f in $(grep -h '^COPY ' "$DOCKERFILE" | awk '{print $2}'); do
+            ts=$(stat -f %m "$SANDBOX_DIR/$f" 2>/dev/null || echo 0)
+            if [ "$ts" -gt "$dockerfile_ts" ]; then
+                dockerfile_ts=$ts
+            fi
+        done
         if [ "$dockerfile_ts" -gt "$image_ts" ]; then
             echo "Dockerfile changed, rebuilding..."
             cmd_sandbox_build
-            needs_create=true
+            local new_image_id
+            new_image_id=$(docker images -q "$IMAGE_NAME" 2>/dev/null)
+            if [ "$new_image_id" != "$old_image_id" ]; then
+                needs_create=true
+            fi
         fi
     fi
 
