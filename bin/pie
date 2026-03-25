@@ -56,6 +56,26 @@ cmd_sandbox_run() {
     docker sandbox run "$(sandbox_name)" "$@"
 }
 
+cmd_sandbox_stop_all() {
+    echo "Stopping all pi sandboxes..."
+    local stopped_count=0
+    
+    # Find all running pi sandboxes (names starting with "pi-")
+    while IFS= read -r sandbox_name; do
+        if [ -n "$sandbox_name" ]; then
+            echo "Stopping sandbox: $sandbox_name"
+            docker sandbox stop "$sandbox_name"
+            ((stopped_count++))
+        fi
+    done < <(docker sandbox ls 2>/dev/null | awk '$1 ~ /^pi-/ {print $1}')
+    
+    if [ $stopped_count -eq 0 ]; then
+        echo "No running pi sandboxes found."
+    else
+        echo "Stopped $stopped_count pi sandbox(s)."
+    fi
+}
+
 cmd_sandbox() {
     local name
     name=$(sandbox_name)
@@ -115,6 +135,7 @@ Commands:
                       -m, --mount <path>  Add extra mount (repeatable)
     sandbox-destroy   Stop and remove the sandbox
     sandbox-run       Launch an existing sandbox
+    sandbox-stop-all  Stop all running pi sandboxes (end of day cleanup)
     help              Show this help
 EOF
 }
@@ -127,6 +148,7 @@ case "${1:-help}" in
     sandbox-create) shift; cmd_sandbox_create "$@" ;;
     sandbox-destroy) cmd_sandbox_destroy ;;
     sandbox-run)    shift; cmd_sandbox_run "$@" ;;
+    sandbox-stop-all) cmd_sandbox_stop_all ;;
     help|--help|-h) cmd_help ;;
     *)              echo "Unknown command: $1"; cmd_help; exit 1 ;;
 esac
