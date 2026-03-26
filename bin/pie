@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Config
-SANDBOX_MOUNTS=(~/.pi ~/.config)
+SANDBOX_MOUNTS=(~/.pi ~/.config ~/.dotfiles)
 IMAGE_NAME="dotpi-sandbox:latest"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 SANDBOX_DIR="$SCRIPT_DIR/sandbox"
@@ -54,6 +54,10 @@ cmd_sandbox_destroy() {
 
 cmd_sandbox_run() {
     docker sandbox run "$(sandbox_name)" "$@"
+}
+
+cmd_sandbox_run_shell() {
+    docker sandbox exec -it --workdir "$(sandbox_root)" "$(sandbox_name)" env NOPI=1 bash -i
 }
 
 cmd_sandbox_stop_all() {
@@ -135,6 +139,7 @@ Commands:
                       -m, --mount <path>  Add extra mount (repeatable)
     sandbox-destroy   Stop and remove the sandbox
     sandbox-run       Launch an existing sandbox
+    sandbox-run-shell Connect to running sandbox with plain bash shell
     sandbox-stop-all  Stop all running pi sandboxes (end of day cleanup)
     help              Show this help
 EOF
@@ -148,6 +153,7 @@ case "${1:-help}" in
     sandbox-create) shift; cmd_sandbox_create "$@" ;;
     sandbox-destroy) cmd_sandbox_destroy ;;
     sandbox-run)    shift; cmd_sandbox_run "$@" ;;
+    sandbox-run-shell) cmd_sandbox_run_shell ;;
     sandbox-stop-all) cmd_sandbox_stop_all ;;
     help|--help|-h) cmd_help ;;
     *)              echo "Unknown command: $1"; cmd_help; exit 1 ;;
