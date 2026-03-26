@@ -125,6 +125,41 @@ cmd_sandbox() {
     cmd_sandbox_run "$@"
 }
 
+cmd_init() {
+    local bin_dir="$SCRIPT_DIR/bin"
+    local local_bin="$HOME/.local/bin"
+    
+    # Ensure ~/.local/bin exists
+    mkdir -p "$local_bin"
+    
+    echo "Creating symlinks in $local_bin..."
+    
+    # Loop through all executable files in bin/
+    for binary in "$bin_dir"/*; do
+        if [[ -x "$binary" && -f "$binary" ]]; then
+            local binary_name
+            binary_name=$(basename "$binary")
+            local target="$local_bin/$binary_name"
+            
+            # Remove existing symlink if it exists
+            if [[ -L "$target" ]]; then
+                echo "Updating existing symlink: $binary_name"
+                rm "$target"
+            elif [[ -e "$target" ]]; then
+                echo "Warning: $target exists but is not a symlink - skipping"
+                continue
+            else
+                echo "Creating symlink: $binary_name"
+            fi
+            
+            # Create the symlink
+            ln -s "$binary" "$target"
+        fi
+    done
+    
+    echo "Init complete! Make sure $local_bin is in your PATH."
+}
+
 cmd_help() {
     cat <<EOF
 pie — pi environment manager
@@ -132,6 +167,7 @@ pie — pi environment manager
 Usage: pie <command> [args...]
 
 Commands:
+    init              Create symlinks in ~/.local/bin for all binaries
     sandbox           Smart launch: build/create/run as needed
     sandbox-info      Show resolved sandbox name and root
     sandbox-build     Build the sandbox Docker image
@@ -147,6 +183,7 @@ EOF
 
 # Dispatch
 case "${1:-help}" in
+    init)           cmd_init ;;
     sandbox)        shift; cmd_sandbox "$@" ;;
     sandbox-info)   cmd_sandbox_info ;;
     sandbox-build)  cmd_sandbox_build ;;
