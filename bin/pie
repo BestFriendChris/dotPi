@@ -53,11 +53,11 @@ cmd_sandbox_destroy() {
 }
 
 cmd_sandbox_run() {
-    docker sandbox run "$(sandbox_name)" "$@"
+    exec docker sandbox run "$(sandbox_name)" "$@"
 }
 
 cmd_sandbox_run_shell() {
-    docker sandbox exec -it --workdir "$(sandbox_root)" "$(sandbox_name)" env NOPI=1 bash -i
+    exec docker sandbox exec -it --workdir "$(sandbox_root)" "$(sandbox_name)" env NOPI=1 bash -i
 }
 
 cmd_sandbox_stop_all() {
