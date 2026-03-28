@@ -35,7 +35,8 @@ RUN curl -fsSL "https://github.com/mattwynne/yaks/releases/download/latest/yx-li
     rm -rf /tmp/yx.zip /tmp/bin /tmp/completions
 
 # pi (installed globally via npm)
-RUN npm install -g @mariozechner/pi-coding-agent
+ARG PI_VERSION=0.63.1
+RUN npm install -g @mariozechner/pi-coding-agent@$PI_VERSION
 
 # sync-settings script
 COPY sync-settings.sh /usr/local/bin/sync-settings
