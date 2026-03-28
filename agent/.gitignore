@@ -1,0 +1,14 @@
+# Pi session files (user-specific conversation history)
+sessions/
+
+# Downloaded packages (npm/git installs)
+npm/
+git/
+bin/
+
+# Debug logs
+*.log
+pi-debug.log
+
+# Authentication credentials
+auth.json

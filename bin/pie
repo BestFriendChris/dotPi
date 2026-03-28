@@ -128,6 +128,9 @@ cmd_sandbox() {
 cmd_init() {
     local bin_dir="$SCRIPT_DIR/bin"
     local local_bin="$HOME/.local/bin"
+    local pi_dir="$HOME/.pi"
+    local pi_migrate_dir="$HOME/.piMigrate"
+    local migrated=false
     
     # Ensure ~/.local/bin exists
     mkdir -p "$local_bin"
@@ -157,7 +160,51 @@ cmd_init() {
         fi
     done
     
+    # Handle .pi directory migration and workspace setup
+    echo ""
+    echo "Setting up ~/.pi workspace..."
+    
+    # Check if ~/.pi exists and move it to ~/.piMigrate
+    if [[ -d "$pi_dir" ]]; then
+        echo "Found existing ~/.pi directory, migrating to ~/.piMigrate for backup..."
+        if [[ -d "$pi_migrate_dir" ]]; then
+            echo "Warning: ~/.piMigrate already exists! Manual cleanup may be required."
+        else
+            mv "$pi_dir" "$pi_migrate_dir"
+            migrated=true
+            echo "Moved ~/.pi to ~/.piMigrate"
+        fi
+    fi
+    
+    # Create jj workspace for ~/.pi
+    echo "Creating jj workspace for ~/.pi..."
+    if jj workspace add --name local_dot_pi --message "local: dotPi" -r main "$pi_dir" 2>/dev/null; then
+        echo "Created jj workspace 'local_dot_pi' at ~/.pi"
+    else
+        echo "Warning: Failed to create jj workspace. You may need to run this from within a jj repository."
+    fi
+    
+    # If we migrated content, rsync it back
+    if [[ "$migrated" == "true" && -d "$pi_migrate_dir" && -d "$pi_dir" ]]; then
+        echo "Syncing migrated content back to new ~/.pi workspace..."
+        if rsync -av "$pi_migrate_dir/" "$pi_dir/"; then
+            echo "Successfully synced content from ~/.piMigrate to ~/.pi"
+            echo "NOTE: ~/.piMigrate has been preserved for validation. Remove it manually once you've verified nothing was lost."
+        else
+            echo "Warning: Failed to sync content from ~/.piMigrate"
+        fi
+    fi
+    
+    echo ""
     echo "Init complete! Make sure $local_bin is in your PATH."
+    if [[ "$migrated" == "true" ]]; then
+        echo ""
+        echo "Migration summary:"
+        echo "  - Backed up original ~/.pi to ~/.piMigrate"
+        echo "  - Created new jj workspace at ~/.pi"
+        echo "  - Synced content from backup to new workspace"
+        echo "  - Please verify your ~/.pi content and remove ~/.piMigrate when satisfied"
+    fi
 }
 
 cmd_help() {
