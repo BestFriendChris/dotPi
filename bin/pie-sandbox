@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Config
+SANDBOX_MOUNTS=(~/.pi ~/.config ~/.dotfiles)
+IMAGE_NAME="dotpi-sandbox:latest"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+SANDBOX_DIR="$SCRIPT_DIR/sandbox"
+DOCKERFILE="$SANDBOX_DIR/Dockerfile"
+
+# Derive sandbox root from jj/git or fall back to cwd
+sandbox_root() {
+    jj workspace root 2>/dev/null \
+        || git rev-parse --show-toplevel 2>/dev/null \
+        || pwd
+}
+
+sandbox_name() {
+    echo "pi-$(basename "$(sandbox_root)")"
+}
+
+# Commands
+
+cmd_info() {
+    echo "sandbox-root: $(sandbox_root)"
+    echo "sandbox-name: $(sandbox_name)"
+}
+
+cmd_build() {
+    docker build -f "$DOCKERFILE" -t "$IMAGE_NAME" "$SANDBOX_DIR"
+}
+
+cmd_create() {
+    local name mounts
+    name=$(sandbox_name)
+    mounts=("${SANDBOX_MOUNTS[@]}")
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -m|--mount) mounts+=("$2"); shift 2 ;;
+            *) echo "Unknown option: $1"; exit 1 ;;
+        esac
+    done
+    docker sandbox stop "$name" 2>/dev/null || true
+    docker sandbox rm "$name" 2>/dev/null || true
+    docker sandbox create --name "$name" -t "$IMAGE_NAME" shell "$(sandbox_root)" "${mounts[@]}"
+}
+
+cmd_destroy() {
+    local name
+    name=$(sandbox_name)
+    docker sandbox stop "$name"
+    docker sandbox rm "$name"
+}
+
+cmd_run() {
+    exec docker sandbox run "$(sandbox_name)" "$@"
+}
+
+cmd_run_shell() {
+    exec docker sandbox exec -it --workdir "$(sandbox_root)" "$(sandbox_name)" env NOPI=1 bash -i
+}
+
+cmd_stop_all() {
+    echo "Stopping all pi sandboxes..."
+    local stopped_count=0
+    
+    # Find all running pi sandboxes (names starting with "pi-")
+    while IFS= read -r sandbox_name; do
+        if [ -n "$sandbox_name" ]; then
+            echo "Stopping sandbox: $sandbox_name"
+            docker sandbox stop "$sandbox_name"
+            ((stopped_count++))
+        fi
+    done < <(docker sandbox ls 2>/dev/null | awk '$1 ~ /^pi-/ {print $1}')
+    
+    if [ $stopped_count -eq 0 ]; then
+        echo "No running pi sandboxes found."
+    else
+        echo "Stopped $stopped_count pi sandbox(s)."
+    fi
+}
+
+cmd_smart_launch() {
+    local name
+    name=$(sandbox_name)
+
+    # Check if image needs (re)building
+    local needs_create=false
+    local old_image_id
+    old_image_id=$(docker images -q "$IMAGE_NAME" 2>/dev/null)
+    if [ -z "$old_image_id" ]; then
+        echo "Image not found, building..."
+        cmd_build
+        needs_create=true
+    else
+        local image_created image_ts dockerfile_ts
+        image_created=$(docker inspect "$IMAGE_NAME" | grep -m1 '"Created"' | cut -d'"' -f4)
+        image_ts=$(date -jf "%Y-%m-%dT%H:%M:%S" "$(echo "$image_created" | cut -d. -f1)" +%s)
+        # Use the newest mtime of Dockerfile and any COPY'd files as the build timestamp
+        dockerfile_ts=$(stat -f %m "$DOCKERFILE")
+        for f in $(grep -h '^COPY ' "$DOCKERFILE" | awk '{print $2}'); do
+            ts=$(stat -f %m "$SANDBOX_DIR/$f" 2>/dev/null || echo 0)
+            if [ "$ts" -gt "$dockerfile_ts" ]; then
+                dockerfile_ts=$ts
+            fi
+        done
+        if [ "$dockerfile_ts" -gt "$image_ts" ]; then
+            echo "Dockerfile changed, rebuilding..."
+            cmd_build
+            local new_image_id
+            new_image_id=$(docker images -q "$IMAGE_NAME" 2>/dev/null)
+            if [ "$new_image_id" != "$old_image_id" ]; then
+                needs_create=true
+            fi
+        fi
+    fi
+
+    # Check if sandbox needs to be (re)created
+    if [ "$needs_create" = true ] || ! docker sandbox ls 2>/dev/null | grep -q "$name"; then
+        echo "Creating sandbox..."
+        cmd_create
+    fi
+
+    # Run it
+    cmd_run "$@"
+}
+
+cmd_help() {
+    cat <<EOF
+pie-sandbox — sandbox management for pi
+
+Usage: pie sandbox <command> [args...]
+
+Commands:
+    (no command)      Smart launch: build/create/run as needed
+    info              Show resolved sandbox name and root  
+    build             Build the sandbox Docker image
+    create            Create a new sandbox (removes existing first)
+                      -m, --mount <path>  Add extra mount (repeatable)
+    destroy           Stop and remove the sandbox
+    run               Launch an existing sandbox
+    run-shell         Connect to running sandbox with plain bash shell
+    stop-all          Stop all running pi sandboxes (end of day cleanup)
+    help              Show this help
+
+Examples:
+    pie sandbox                    # Smart launch (most common)
+    pie sandbox info               # Show sandbox details
+    pie sandbox create -m /tmp     # Create with extra mount
+    pie sandbox run bash           # Run bash in sandbox
+EOF
+}
+
+# Dispatch
+case "${1:-smart-launch}" in
+    smart-launch)   shift; cmd_smart_launch "$@" ;;
+    info)           cmd_info ;;
+    build)          cmd_build ;;
+    create)         shift; cmd_create "$@" ;;
+    destroy)        cmd_destroy ;;
+    run)            shift; cmd_run "$@" ;;
+    run-shell)      cmd_run_shell ;;
+    stop-all)       cmd_stop_all ;;
+    help|--help|-h) cmd_help ;;
+    --brief-help)   echo "Sandbox management (Docker containers, build/create/run)" ;;
+    *)              echo "Unknown sandbox command: $1"; cmd_help; exit 1 ;;
+esac

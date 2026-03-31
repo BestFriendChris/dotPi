@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Config
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+
+# Always work from the dotPi repo directory
+cd "$SCRIPT_DIR"
+
+# Check if ~/.pi is already a jj workspace for this specific dotPi repo
+is_dotpi_setup() {
+    local pi_dir="$HOME/.pi"
+    
+    if [[ ! -d "$pi_dir" ]]; then
+        return 1  # ~/.pi doesn't exist
+    fi
+    
+    # Check if the local_dot_pi workspace exists (proof it belongs to this repo)
+    if (cd "$pi_dir" && jj workspace list 2>/dev/null | grep -q "local_dot_pi"); then
+        return 0  # Already setup correctly for this repo
+    fi
+    
+    return 1  # Not setup for this specific repo
+}
+
+cmd_bin() {
+    local bin_dir="$SCRIPT_DIR/bin"
+    local local_bin="$HOME/.local/bin"
+    local changes_made=false
+    
+    # Ensure ~/.local/bin exists
+    mkdir -p "$local_bin"
+    
+    echo "Setting up symlinks in $local_bin..."
+    
+    # Loop through all executable files in bin/
+    for binary in "$bin_dir"/*; do
+        if [[ -x "$binary" && -f "$binary" ]]; then
+            local binary_name
+            binary_name=$(basename "$binary")
+            local target="$local_bin/$binary_name"
+            
+            # Check if symlink is already correct
+            if [[ -L "$target" && "$(readlink "$target")" == "$binary" ]]; then
+                echo "✓ $binary_name (already linked)"
+                continue
+            fi
+            
+            # Remove existing symlink if it exists
+            if [[ -L "$target" ]]; then
+                echo "Updating symlink: $binary_name"
+                rm "$target"
+                changes_made=true
+            elif [[ -e "$target" ]]; then
+                echo "Warning: $target exists but is not a symlink - skipping"
+                continue
+            else
+                echo "Creating symlink: $binary_name"
+                changes_made=true
+            fi
+            
+            # Create the symlink
+            ln -s "$binary" "$target"
+        fi
+    done
+    
+    if [[ "$changes_made" == "false" ]]; then
+        echo "All symlinks already up to date."
+    fi
+    
+    echo ""  
+    echo "Symlink setup complete! Make sure $local_bin is in your PATH."
+}
+
+cmd_dotpi() {
+    local pi_dir="$HOME/.pi"
+    local pi_migrate_dir="$HOME/.piMigrate"
+    local migrated=false
+    local sync_succeeded=false
+    
+    # Check if already setup (we're already in SCRIPT_DIR)
+    if is_dotpi_setup; then
+        echo "✓ ~/.pi workspace already setup for this repository."
+        return 0
+    fi
+    
+    echo "Setting up ~/.pi workspace..."
+    
+    # Check if ~/.pi exists and move it to ~/.piMigrate
+    if [[ -d "$pi_dir" ]]; then
+        echo "Found existing ~/.pi directory, migrating to ~/.piMigrate for backup..."
+        if [[ -d "$pi_migrate_dir" ]]; then
+            echo "Warning: ~/.piMigrate already exists! Manually clean this up and try again."
+            return 1
+        else
+            mv "$pi_dir" "$pi_migrate_dir"
+            migrated=true
+            echo "Moved ~/.pi to ~/.piMigrate"
+        fi
+    fi
+    
+    # Create jj workspace for ~/.pi
+    echo "Creating jj workspace for ~/.pi..."
+    if jj workspace add --name local_dot_pi --message "local: dotPi" -r main "$pi_dir" 2>/dev/null; then
+        echo "Created jj workspace 'local_dot_pi' at ~/.pi"
+    else
+        echo "Warning: Failed to create jj workspace. You may need to run this from within a jj repository."
+        return 1
+    fi
+    
+    # If we migrated content, rsync it back
+    if [[ "$migrated" == "true" && -d "$pi_migrate_dir" && -d "$pi_dir" ]]; then
+        echo "Syncing migrated content back to new ~/.pi workspace..."
+        if rsync -av "$pi_migrate_dir/" "$pi_dir/"; then
+            echo "Successfully synced content from ~/.piMigrate to ~/.pi"
+            echo "NOTE: ~/.piMigrate has been preserved for validation. Remove it manually once you've verified nothing was lost."
+            sync_succeeded=true
+        else
+            echo "Warning: Failed to sync content from ~/.piMigrate"
+        fi
+    fi
+    
+    echo ""
+    if [[ "$migrated" == "true" ]]; then
+        echo "Migration summary:"
+        echo "  - Backed up original ~/.pi to ~/.piMigrate"
+        echo "  - Created new jj workspace at ~/.pi"
+        if [[ "$sync_succeeded" == "true" ]]; then
+            echo "  - Synced content from backup to new workspace"
+            echo "  - Please verify your ~/.pi content and remove ~/.piMigrate when satisfied"
+        fi
+    else
+        echo "dotPi workspace setup complete!"
+    fi
+}
+
+cmd_all() {
+    echo "Running full pi initialization..."
+    echo ""
+    cmd_bin
+    echo ""
+    cmd_dotpi
+    echo ""
+    echo "Full initialization complete!"
+}
+
+cmd_help() {
+    cat <<EOF
+pie-init — initialization and setup for pi
+
+Usage: pie init <command> [args...]
+
+Commands:
+    (no command)      Run both bin and dotPi setup
+    bin               Setup symlinks in ~/.local/bin
+    dotPi             Setup ~/.pi jj workspace
+    help              Show this help
+
+Examples:
+    pie init                      # Run full setup (bin + dotPi)
+    pie init bin                  # Just setup symlinks
+    pie init dotPi                # Just setup ~/.pi workspace
+EOF
+}
+
+# Dispatch
+case "${1:-all}" in
+    all)            cmd_all ;;
+    bin)            cmd_bin ;;
+    dotPi)          cmd_dotpi ;;
+    help|--help|-h) cmd_help ;;
+    --brief-help)   echo "Initialization and setup (symlinks, ~/.pi workspace)" ;;
+    *)              echo "Unknown init command: $1"; cmd_help; exit 1 ;;
+esac

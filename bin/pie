@@ -2,208 +2,20 @@
 set -euo pipefail
 
 # Config
-SANDBOX_MOUNTS=(~/.pi ~/.config ~/.dotfiles)
-IMAGE_NAME="dotpi-sandbox:latest"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-SANDBOX_DIR="$SCRIPT_DIR/sandbox"
-DOCKERFILE="$SANDBOX_DIR/Dockerfile"
+BIN_DIR="$SCRIPT_DIR/bin"
 
-# Derive sandbox root from git/jj or fall back to cwd
-sandbox_root() {
-    git rev-parse --show-toplevel 2>/dev/null \
-        || jj workspace root 2>/dev/null \
-        || pwd
-}
-
-sandbox_name() {
-    echo "pi-$(basename "$(sandbox_root)")"
-}
-
-# Commands
-
-cmd_sandbox_info() {
-    echo "sandbox-root: $(sandbox_root)"
-    echo "sandbox-name: $(sandbox_name)"
-}
-
-cmd_sandbox_build() {
-    docker build -f "$DOCKERFILE" -t "$IMAGE_NAME" "$SANDBOX_DIR"
-}
-
-cmd_sandbox_create() {
-    local name mounts
-    name=$(sandbox_name)
-    mounts=("${SANDBOX_MOUNTS[@]}")
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -m|--mount) mounts+=("$2"); shift 2 ;;
-            *) echo "Unknown option: $1"; exit 1 ;;
-        esac
-    done
-    docker sandbox stop "$name" 2>/dev/null || true
-    docker sandbox rm "$name" 2>/dev/null || true
-    docker sandbox create --name "$name" -t "$IMAGE_NAME" shell "$(sandbox_root)" "${mounts[@]}"
-}
-
-cmd_sandbox_destroy() {
-    local name
-    name=$(sandbox_name)
-    docker sandbox stop "$name"
-    docker sandbox rm "$name"
-}
-
-cmd_sandbox_run() {
-    exec docker sandbox run "$(sandbox_name)" "$@"
-}
-
-cmd_sandbox_run_shell() {
-    exec docker sandbox exec -it --workdir "$(sandbox_root)" "$(sandbox_name)" env NOPI=1 bash -i
-}
-
-cmd_sandbox_stop_all() {
-    echo "Stopping all pi sandboxes..."
-    local stopped_count=0
+cmd_delegate() {
+    local subcommand="$1"
+    shift
+    local script_path="$BIN_DIR/pie-$subcommand"
     
-    # Find all running pi sandboxes (names starting with "pi-")
-    while IFS= read -r sandbox_name; do
-        if [ -n "$sandbox_name" ]; then
-            echo "Stopping sandbox: $sandbox_name"
-            docker sandbox stop "$sandbox_name"
-            ((stopped_count++))
-        fi
-    done < <(docker sandbox ls 2>/dev/null | awk '$1 ~ /^pi-/ {print $1}')
-    
-    if [ $stopped_count -eq 0 ]; then
-        echo "No running pi sandboxes found."
+    if [[ -x "$script_path" ]]; then
+        exec "$script_path" "$@"
     else
-        echo "Stopped $stopped_count pi sandbox(s)."
-    fi
-}
-
-cmd_sandbox() {
-    local name
-    name=$(sandbox_name)
-
-    # Check if image needs (re)building
-    local needs_create=false
-    local old_image_id
-    old_image_id=$(docker images -q "$IMAGE_NAME" 2>/dev/null)
-    if [ -z "$old_image_id" ]; then
-        echo "Image not found, building..."
-        cmd_sandbox_build
-        needs_create=true
-    else
-        local image_created image_ts dockerfile_ts
-        image_created=$(docker inspect "$IMAGE_NAME" | grep -m1 '"Created"' | cut -d'"' -f4)
-        image_ts=$(date -jf "%Y-%m-%dT%H:%M:%S" "$(echo "$image_created" | cut -d. -f1)" +%s)
-        # Use the newest mtime of Dockerfile and any COPY'd files as the build timestamp
-        dockerfile_ts=$(stat -f %m "$DOCKERFILE")
-        for f in $(grep -h '^COPY ' "$DOCKERFILE" | awk '{print $2}'); do
-            ts=$(stat -f %m "$SANDBOX_DIR/$f" 2>/dev/null || echo 0)
-            if [ "$ts" -gt "$dockerfile_ts" ]; then
-                dockerfile_ts=$ts
-            fi
-        done
-        if [ "$dockerfile_ts" -gt "$image_ts" ]; then
-            echo "Dockerfile changed, rebuilding..."
-            cmd_sandbox_build
-            local new_image_id
-            new_image_id=$(docker images -q "$IMAGE_NAME" 2>/dev/null)
-            if [ "$new_image_id" != "$old_image_id" ]; then
-                needs_create=true
-            fi
-        fi
-    fi
-
-    # Check if sandbox needs to be (re)created
-    if [ "$needs_create" = true ] || ! docker sandbox ls 2>/dev/null | grep -q "$name"; then
-        echo "Creating sandbox..."
-        cmd_sandbox_create
-    fi
-
-    # Run it
-    cmd_sandbox_run "$@"
-}
-
-cmd_init() {
-    local bin_dir="$SCRIPT_DIR/bin"
-    local local_bin="$HOME/.local/bin"
-    local pi_dir="$HOME/.pi"
-    local pi_migrate_dir="$HOME/.piMigrate"
-    local migrated=false
-    
-    # Ensure ~/.local/bin exists
-    mkdir -p "$local_bin"
-    
-    echo "Creating symlinks in $local_bin..."
-    
-    # Loop through all executable files in bin/
-    for binary in "$bin_dir"/*; do
-        if [[ -x "$binary" && -f "$binary" ]]; then
-            local binary_name
-            binary_name=$(basename "$binary")
-            local target="$local_bin/$binary_name"
-            
-            # Remove existing symlink if it exists
-            if [[ -L "$target" ]]; then
-                echo "Updating existing symlink: $binary_name"
-                rm "$target"
-            elif [[ -e "$target" ]]; then
-                echo "Warning: $target exists but is not a symlink - skipping"
-                continue
-            else
-                echo "Creating symlink: $binary_name"
-            fi
-            
-            # Create the symlink
-            ln -s "$binary" "$target"
-        fi
-    done
-    
-    # Handle .pi directory migration and workspace setup
-    echo ""
-    echo "Setting up ~/.pi workspace..."
-    
-    # Check if ~/.pi exists and move it to ~/.piMigrate
-    if [[ -d "$pi_dir" ]]; then
-        echo "Found existing ~/.pi directory, migrating to ~/.piMigrate for backup..."
-        if [[ -d "$pi_migrate_dir" ]]; then
-            echo "Warning: ~/.piMigrate already exists! Manual cleanup may be required."
-        else
-            mv "$pi_dir" "$pi_migrate_dir"
-            migrated=true
-            echo "Moved ~/.pi to ~/.piMigrate"
-        fi
-    fi
-    
-    # Create jj workspace for ~/.pi
-    echo "Creating jj workspace for ~/.pi..."
-    if jj workspace add --name local_dot_pi --message "local: dotPi" -r main "$pi_dir" 2>/dev/null; then
-        echo "Created jj workspace 'local_dot_pi' at ~/.pi"
-    else
-        echo "Warning: Failed to create jj workspace. You may need to run this from within a jj repository."
-    fi
-    
-    # If we migrated content, rsync it back
-    if [[ "$migrated" == "true" && -d "$pi_migrate_dir" && -d "$pi_dir" ]]; then
-        echo "Syncing migrated content back to new ~/.pi workspace..."
-        if rsync -av "$pi_migrate_dir/" "$pi_dir/"; then
-            echo "Successfully synced content from ~/.piMigrate to ~/.pi"
-            echo "NOTE: ~/.piMigrate has been preserved for validation. Remove it manually once you've verified nothing was lost."
-        else
-            echo "Warning: Failed to sync content from ~/.piMigrate"
-        fi
-    fi
-    
-    echo ""
-    echo "Init complete! Make sure $local_bin is in your PATH."
-    if [[ "$migrated" == "true" ]]; then
-        echo ""
-        echo "Migration summary:"
-        echo "  - Backed up original ~/.pi to ~/.piMigrate"
-        echo "  - Created new jj workspace at ~/.pi"
-        echo "  - Synced content from backup to new workspace"
-        echo "  - Please verify your ~/.pi content and remove ~/.piMigrate when satisfied"
+        echo "Error: Unknown command '$subcommand' and no pie-$subcommand script found"
+        cmd_help
+        exit 1
     fi
 }
 
@@ -214,31 +26,28 @@ pie — pi environment manager
 Usage: pie <command> [args...]
 
 Commands:
-    init              Create symlinks in ~/.local/bin for all binaries
-    sandbox           Smart launch: build/create/run as needed
-    sandbox-info      Show resolved sandbox name and root
-    sandbox-build     Build the sandbox Docker image
-    sandbox-create    Create a new sandbox (removes existing first)
-                      -m, --mount <path>  Add extra mount (repeatable)
-    sandbox-destroy   Stop and remove the sandbox
-    sandbox-run       Launch an existing sandbox
-    sandbox-run-shell Connect to running sandbox with plain bash shell
-    sandbox-stop-all  Stop all running pi sandboxes (end of day cleanup)
-    help              Show this help
 EOF
+    
+    # Show help for available pie-* scripts with their brief descriptions
+    for script in "$BIN_DIR"/pie-*; do
+        if [[ -x "$script" ]]; then
+            local cmd_name brief_help
+            cmd_name=$(basename "$script" | sed 's/^pie-//')
+            brief_help=$("$script" --brief-help 2>/dev/null || echo "(see: pie $cmd_name help)")
+            printf "    %-16s %s\n" "$cmd_name" "$brief_help"
+        fi
+    done
+    
+    printf "    %-16s %s\n" "help" "Show this help"
+    
+    echo ""
+    echo "For detailed help on any command: pie <command> help"
 }
 
 # Dispatch
 case "${1:-help}" in
-    init)           cmd_init ;;
-    sandbox)        shift; cmd_sandbox "$@" ;;
-    sandbox-info)   cmd_sandbox_info ;;
-    sandbox-build)  cmd_sandbox_build ;;
-    sandbox-create) shift; cmd_sandbox_create "$@" ;;
-    sandbox-destroy) cmd_sandbox_destroy ;;
-    sandbox-run)    shift; cmd_sandbox_run "$@" ;;
-    sandbox-run-shell) cmd_sandbox_run_shell ;;
-    sandbox-stop-all) cmd_sandbox_stop_all ;;
+    init)           shift; cmd_delegate init "$@" ;;
+    sandbox)        shift; cmd_delegate sandbox "$@" ;;
     help|--help|-h) cmd_help ;;
-    *)              echo "Unknown command: $1"; cmd_help; exit 1 ;;
+    *)              cmd_delegate "$1" "${@:2}" ;;
 esac
