@@ -1,0 +1,17 @@
+{
+  "meta": {
+    "name": "skill-creator-user",
+    "description": "Sandbox profile for pi skill creation - read access to CWD, write access to user ~/.pi/skills/"
+  },
+  "security": {
+    "groups": ["deny_credentials", "deny_shell_configs", "deny_shell_history"]
+  },
+  "workdir": {
+    "access": "read"
+  },
+  "filesystem": {
+    "allow": [
+      "$HOME/.pi/agent/skills"
+    ]
+  }
+}

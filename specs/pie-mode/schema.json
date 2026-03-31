@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["name", "description"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "description": "Mode name (lowercase, alphanumeric with hyphens and underscores)"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of the mode"
+    },
+    "nono_profile": {
+      "type": ["string", "null"],
+      "description": "Path to nono profile JSON file (relative to mode directory). Auto-discovers 'nono-profile.json' if not specified. Set to null to disable nono profiles."
+    },
+    "prompt": {
+      "type": "string",
+      "default": "@PROMPT.md",
+      "description": "Main prompt content with inline file embedding. Any '@file_name' references are replaced with file contents (if text) or file paths (if binary). Supports recursive embedding with circular reference detection. Defaults to loading PROMPT.md file."
+    },
+    "append_prompt": {
+      "type": "string",
+      "description": "Additional prompt content to append via pi's APPEND_SYSTEM mechanism. Supports same '@file_name' inline embedding as prompt field."
+    },
+    "disable_pi_system_prompt": {
+      "type": "boolean",
+      "default": false,
+      "description": "Disable pi's default system prompt, using only mode prompt"
+    },
+    "disable_pi_append_system_prompt": {
+      "type": "boolean",
+      "default": false,
+      "description": "Disable pi's default append system prompt, using only mode append prompt"
+    },
+    "extensions": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "string"
+      },
+      "default": ["extensions/*"],
+      "description": "List of extension paths relative to mode directory. Defaults to auto-discovery from extensions/ directory. Set to null to disable mode extensions."
+    },
+    "disable_extension_discovery": {
+      "type": "boolean",
+      "default": false,
+      "description": "Disable pi's default extension discovery (does not affect mode-specific extension loading)"
+    },
+    "cli_args": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Additional CLI arguments to pass to pi command"
+    },
+    "flags": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description"],
+        "anyOf": [
+          {"required": ["short"]},
+          {"required": ["long"]}
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "short": {
+            "type": "string",
+            "pattern": "^[a-zA-Z]$",
+            "description": "Single character short flag"
+          },
+          "long": {
+            "type": "string",
+            "pattern": "^[a-z-]+$",
+            "description": "Long flag name (lowercase with hyphens)"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of the flag"
+          },
+          "override_config": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Configuration overrides when this flag is used",
+            "properties": {
+              "nono_profile": {
+                "type": ["string", "null"],
+                "description": "Override nono profile path. Set to null to return to default behavior."
+              },
+              "prompt": {
+                "type": ["string", "null"],
+                "description": "Override prompt file path. Set to null to return to default PROMPT.md."
+              },
+              "append_prompt": {
+                "type": ["string", "null"],
+                "description": "Override append prompt content. Set to null to return to default."
+              },
+              "disable_pi_system_prompt": {
+                "type": ["boolean", "null"],
+                "description": "Override pi system prompt setting. Set to null to return to default."
+              },
+              "disable_pi_append_system_prompt": {
+                "type": ["boolean", "null"],
+                "description": "Override pi append system prompt setting. Set to null to return to default."
+              },
+              "extensions": {
+                "type": ["array", "null"],
+                "items": {
+                  "type": "string"
+                },
+                "description": "Override extension list. Set to null to return to default."
+              },
+              "disable_extension_discovery": {
+                "type": ["boolean", "null"],
+                "description": "Override extension auto-discovery setting. Set to null to return to default."
+              },
+              "cli_args": {
+                "type": ["array", "null"],
+                "items": {
+                  "type": "string"
+                },
+                "description": "Override CLI arguments. Set to null to return to default."
+              }
+            }
+          }
+        }
+      },
+      "description": "Command-line flags supported by this mode"
+    }
+  }
+}

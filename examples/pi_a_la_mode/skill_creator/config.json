@@ -1,0 +1,17 @@
+{
+  "name": "skill-creator",
+  "description": "Specialized mode for creating high-quality pi agent skills with proper structure and documentation",
+  "nono_profile": "project_specific/nono-profile.json",
+  "append_prompt": "@project_specific/APPEND_PROMPT.md",
+  "flags": {
+    "user": {
+      "short": "u",
+      "long": "user",
+      "description": "Create skills in user global directory (~/.pi/agent/skills) instead of project directory",
+      "override_config": {
+        "nono_profile": "user_specific/nono-profile.json",
+        "append_prompt": "@user_specific/APPEND_PROMPT.md"
+      }
+    }
+  }
+}
