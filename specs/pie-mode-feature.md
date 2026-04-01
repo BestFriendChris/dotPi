@@ -7,7 +7,7 @@ A new feature for the `pie` CLI to support specialized operating modes - highly 
 ## Core Concept
 
 Specialized operating modes that bundle together:
-1. A focused system prompt (MODE.md) tailored for specific tasks
+1. A focused system prompt (PROMPT.md) tailored for specific tasks
 2. Optional nono security profile for sandboxing
 3. Optional pi extensions to auto-load
 4. Other configuration as needed
@@ -20,7 +20,7 @@ Examples:
 ## Key Components
 
 ### Named Modes
-- Each mode defined in its own directory under `./pi/a_la_mode/` or `~/.pi/a_la_mode/`
+- Each mode defined in its own directory under `.pi/a_la_mode/` or `~/.pi/a_la_mode/`
 - Contains a PROMPT.md file with system prompt content (no frontmatter)
 - Requires `config.json` with `name` and `description` fields (source of truth)
 - Optional `nono-profile.json` for sandboxing
@@ -40,7 +40,12 @@ Examples:
 - **For future reference**: Run `nono profile guide` for comprehensive authoring instructions
 - **Profile integration**: `nono-profile.json` contains the actual profile content, making modes self-contained and portable
 - **Constraint enforcement**: Both approaches supported - simple modes use system prompts only, secure modes add nono profiles
-- **Sandbox notification**: When `nono-profile.json` exists, automatically inject sandbox notification into system prompt to prevent AI confusion about permission restrictions
+- **Sandbox notification**: When a nono profile is active, automatically inject sandbox notification into system prompt to prevent AI confusion about permission restrictions
+- **Profile resolution order**:
+  1. `config.json` has `"nono_profile": "path/to/profile.json"` → use that path (relative to mode directory)
+  2. `config.json` has `"nono_profile": null` → explicitly disabled, no sandboxing even if `nono-profile.json` exists
+  3. `config.json` omits `nono_profile` → auto-discover `nono-profile.json` in mode directory root
+  4. No `nono-profile.json` found → no sandboxing
 
 ### Pi Extensions
 - Automatic loading of extensions when the configuration starts
@@ -62,7 +67,7 @@ Examples:
 ```
 
 ### File Requirements
-- **config.json**: Required, contains `name` and `description` fields (source of truth)
+- **config.json**: Required, contains `name` and `description` fields (source of truth). The `name` field must match the directory name — a mismatch is a FATAL validation error.
 - **PROMPT.md**: Pure system prompt content without frontmatter
 - **nono-profile.json**: Optional, enables sandboxed execution
 - **extensions/**: Optional directory for auto-discovered extensions
@@ -71,26 +76,32 @@ Examples:
 
 ### Primary Workflow
 1. User runs `pie mode <mode-name>` or `pie mode /path/to/mode`
-2. Mode discovery: project `./pi/a_la_mode/` → global `~/.pi/a_la_mode/` → direct path
+2. Mode discovery: project `.pi/a_la_mode/` → global `~/.pi/a_la_mode/` → direct path
 3. If mode has `nono-profile.json`, launch with `nono run --profile <profile-location> -- pi`
 4. Otherwise, launch `pi` normally
 5. PROMPT.md content gets appended to system prompt via pi's CLI flags
 6. Extensions loaded: auto-discovered from `extensions/` unless `config.json` specifies otherwise
 
 ### Mode Discovery
-- **Project-specific modes**: `./pi/a_la_mode/` (takes precedence over global)
+- **Project-specific modes**: `.pi/a_la_mode/` (takes precedence over global)
 - **Global modes**: `~/.pi/a_la_mode/` (user-wide availability)
 - **Direct path support**: `pie mode /path/to/mode` for custom locations
 - **Discovery order**: Project → Global → Direct path
 
 ### Commands
-- `pie mode [-v|-vv|-vvv] <mode-name> [--allow] [-- <pi-args>...]` - Launch pi with specified mode and optional pi arguments
+- `pie mode [-v|-vv|-vvv] <mode-name> [--allow] [<mode-flags>...] [-- <pi-args>...]` - Launch pi with specified mode, optional mode-defined flags, and optional pi arguments
 - `pie mode list [-v|-vv|-vvv]` - List all discoverable modes with descriptions, separated by project/user sections
 - `pie mode create [-v|-vv|-vvv] (-u) <name>` - Create new modes using specialized mode-creation mode, with validation against reserved command names
-- `pie mode show [-v|-vv|-vvv] (-u) <name>` - Show mode details (description, location, flags). `-u`/`--user` shows only user modes
-- `pie mode validate [-v|-vv|-vvv] (-u) <name>` - Validate mode directory structure, config.json schema compliance, and file reference integrity
-- `pie mode allow [-v|-vv|-vvv] <name>` - Explicitly trust and allow mode execution
-- `pie mode disallow [-v|-vv|-vvv] <name>` - Explicitly deny mode execution
+- `pie mode show [-v|-vv|-vvv] (-u) <name|path>` - Show mode details (description, location, flags). `-u`/`--user` shows only user modes
+- `pie mode validate [-v|-vv|-vvv] (-u) <name|path>` - Validate mode directory structure, config.json schema compliance, and file reference integrity
+- `pie mode allow [-v|-vv|-vvv] [-f|--force] <name|path>` - Explicitly trust and allow a single mode
+- `pie mode allow [-v|-vv|-vvv] [-f|--force] --all [<directory>]` - Bulk approve all modes in a directory (does not override explicit denials). `-f`/`--force` skips confirmation prompt
+- `pie mode disallow [-v|-vv|-vvv] <name|path>` - Explicitly deny mode execution
+- `pie mode gc [-v|-vv|-vvv]` - Remove stale cache and approval entries for modes whose paths no longer exist
+- `pie mode config` - Show all settings with current values and defaults
+- `pie mode config <key>` - Show a single setting's value and default
+- `pie mode config <key> <value>` - Set a configuration value
+- `pie mode config <key> --reset` - Reset a setting to its default
 
 #### Global Flags
 - `-v, --verbose` - Basic verbose output (mode discovery, selection, execution)
@@ -99,10 +110,34 @@ Examples:
 - `-u, --user` - Operate on user modes only (in `~/.pi/a_la_mode/`)
 - `--allow` - Skip trust prompts and auto-allow modes (execution command only)
 
+#### Mode-Defined Flags
+- Mode-specific flags are defined in `config.json` under the `flags` key
+- Mode flags are placed after `<mode-name>` and before `--`
+- Example: `pie mode skill-creator --global -- --verbose`
+- **Reserved flags**: Mode flags must not collide with global flags (`-v`, `--verbose`, `-u`, `--user`, `--allow`, `-f`, `--force`, `--all`, `--reset`)
+- **Collision detection**: `pie mode validate` checks for reserved flag collisions and reports errors
+
 #### Argument Separation
 - Use `--` to separate pie mode arguments from pi arguments
 - Everything after `--` is passed directly to the pi command
 - Example: `pie mode -vv skill-creator -- --verbose --model gpt-4`
+
+### Config Command
+
+User-level configuration for pie mode, stored at `~/.pi/a_la_mode/.config.json`. Schema defined in `specs/pie-mode/config-schema.json`.
+
+#### Supported Keys
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `file_embedding_size_limit` | string | `100KB` | Maximum file size for inline `@file` embedding. Accepts `B`, `KB`, `MB` suffixes. |
+| `gc_stale_age_days` | integer | `30` | Days before lazy GC considers cache/approval entries stale. |
+
+#### Behavior
+- `pie mode config` — lists all keys with current values and defaults
+- `pie mode config <key>` — shows the key's current value and default
+- `pie mode config <key> <value>` — sets a value (validated against schema before writing)
+- `pie mode config <key> --reset` — removes the key from `.config.json`, reverting to default
+- Config file is created on first `config set` if it doesn't exist
 
 ## Debugging & Observability
 
@@ -127,7 +162,7 @@ Progressive detail levels for troubleshooting mode discovery, loading, and execu
 #### `-vvv` (Full Debug)
 - All `-vv` output plus:
 - Complete file system traversal during discovery
-- Full config.json content (sanitized)
+- Full config.json content
 - All file read operations and content sizes
 - Environment variable setup
 - Complete nono command construction
@@ -186,40 +221,7 @@ When multiple modes exist with the same name:
 - **Path-based modes** (`pie mode /path/to/mode`) bypass name resolution entirely
 
 #### Discovery Order
-1. Project directory: `./pi/a_la_mode/<name>/`
-2. User directory: `~/.pi/a_la_mode/<name>/`
-3. Direct path: `/explicit/path/to/mode/`
-
-### Configuration Merging
-Prompt composition follows strict precedence order:
-
-#### Prompt Merge Order
-```
-[Existing Pi System Prompt] ++
-[Mode Prompt] ++
-[Existing Pi Append System Prompt] ++
-[Mode Append System Prompt]
-```
-
-- **Empty sections**: Missing or unspecified prompts become empty strings
-- **CLI implementation**: Uses `--system-prompt` and `--append-system-prompt` flags
-- **No file dependencies**: Does not rely on APPEND_SYSTEM.md files
-
-#### System Prompt Control
-Mode configuration supports disabling default pi prompts in config.json
-
-## Conflict Resolution
-
-### Mode Name Conflicts
-When multiple modes exist with the same name:
-
-#### **Project vs User Mode Precedence**
-- **Project modes** (`.pi/a_la_mode/`) take precedence over **user modes** (`~/.pi/a_la_mode/`)
-- **Warning logged** when project mode overrides user mode: `"Using project mode 'skill-creator' (overriding user mode)"`
-- **Path-based modes** (`pie mode /path/to/mode`) bypass name resolution entirely
-
-#### **Discovery Order**
-1. Project directory: `./pi/a_la_mode/<name>/`
+1. Project directory: `.pi/a_la_mode/<name>/`
 2. User directory: `~/.pi/a_la_mode/<name>/`
 3. Direct path: `/explicit/path/to/mode/`
 
@@ -320,13 +322,13 @@ Pre-computed execution cache with comprehensive content validation:
 **Hash includes ALL files in mode directory**:
 - Every file's relative path + content (recursive)
 - Any addition, removal, move, or edit invalidates cache and trust
-- Cryptographically secure content verification
+- Content integrity tracking for change detection
 
 ```bash
 # Hash calculation example
 find mode-dir -type f | sort | while read file; do
-  echo "$(realpath --relative-to=mode-dir "$file"):$(md5sum "$file")"
-done | md5sum
+  echo "$(realpath --relative-to=mode-dir "$file"):$(sha256sum "$file")"
+done | sha256sum
 ```
 
 #### **Pre-Computed Cache Contents**
@@ -337,9 +339,19 @@ done | md5sum
 - **Processed nono profiles**: Ready-to-execute sandbox configuration
 - **Complete CLI arguments**: All mode and flag arguments resolved
 
+Cache files are stored in `~/.pi/a_la_mode/.cache/` using a `<mode-name>-<hash>.json` naming scheme, where `<hash>` is a truncated hash of the mode's full path. This avoids collisions between project and user modes with the same name.
+
+```
+~/.pi/a_la_mode/.cache/
+├── skill-creator-a1b2c3d4.json    # from ./pi/a_la_mode/skill-creator
+├── skill-creator-f7e83b12.json    # from ~/.pi/a_la_mode/skill-creator
+└── code-reviewer-c4d5e6f7.json
+```
+
 ```json
-// ~/.pi/cache/modes/skill-creator.json
+// ~/.pi/a_la_mode/.cache/skill-creator-a1b2c3d4.json
 {
+  "mode_path": "/Users/foo/project/.pi/a_la_mode/skill-creator",
   "content_hash": "a1b2c3d4e5f6...",
   "cached_at": "2024-03-31T10:30:00Z",
   "default_config": {
@@ -360,12 +372,15 @@ done | md5sum
 ### Trust Integration
 **Content-based trust verification with three states**:
 
-#### **Trust States**
+Approval state is stored in `~/.pi/a_la_mode/.approvals.json`, using the same `<mode-name>-<hash>` keying as cache files. Approvals are machine-specific and not portable across machines (similar to direnv).
+
+#### **Approval States**
 ```json
-// ~/.pi/trusted-modes.json  
+// ~/.pi/a_la_mode/.approvals.json
 {
   "modes": {
-    "./pi/a_la_mode/skill-creator": {
+    "skill-creator-a1b2c3d4": {
+      "path": "/Users/foo/project/.pi/a_la_mode/skill-creator",
       "state": "allowed",           // "allowed" | "denied" | "unknown"
       "content_hash": "a1b2c3d4e5f6...",
       "last_verified": "2024-03-31T10:30:00Z"
@@ -375,9 +390,42 @@ done | md5sum
 ```
 
 #### **Trust Management Commands**
-- `pie mode allow <name>` - Explicitly trust mode
-- `pie mode disallow <name>` - Explicitly deny mode  
+- `pie mode allow <name>` - Explicitly trust and allow a single mode
+- `pie mode allow --all` - Bulk approve all discoverable project modes (does not override explicit denials)
+- `pie mode allow --all --user` - Bulk approve all user modes
+- `pie mode allow --all /path/to/a_la_mode/` - Bulk approve all modes in a specific directory
+- `pie mode disallow <name>` - Explicitly deny mode execution
 - Trust state separate from validation/caching
+
+#### **Bulk Approval Output**
+`pie mode allow --all` always shows a full status list with icons and descriptions:
+
+```bash
+$ pie mode allow --all
+Found 4 modes in ./pi/a_la_mode/:
+  ✓ skill-creator   Specialized mode for creating skills (already approved)
+  + code-reviewer    Code review mode (will be approved)
+  + spec-writer      Spec writing mode (will be approved)
+  ✗ untrusted-mode   Untrusted experimental mode (denied, unchanged)
+Approve 2 modes? [y/N]: y
+Approved: code-reviewer, spec-writer
+```
+
+With `--force`, the confirmation prompt is skipped but output is still shown:
+
+```bash
+$ pie mode allow --all --force
+Found 4 modes in ./pi/a_la_mode/:
+  ✓ skill-creator   Specialized mode for creating skills (already approved)
+  ✓ code-reviewer    Code review mode (approved)
+  ✓ spec-writer      Spec writing mode (approved)
+  ✗ untrusted-mode   Untrusted experimental mode (denied, unchanged)
+```
+
+Key rules:
+- `--all` never overrides explicit `disallow` denials
+- Always shows full list with status icons, names, descriptions, and parenthetical status
+- `--force` skips the confirmation prompt but still prints results
 
 #### **Execution Trust Flow**
 ```bash
@@ -403,6 +451,11 @@ pie mode skill-creator
 - First-time unknown modes
 - Content-changed re-verification
 - Skips all trust prompts
+
+#### **Non-Interactive Environments (CI/Scripts)**
+- If stdin is not a TTY and a trust prompt would be required, the mode fails with a FATAL error and a message suggesting `--allow` or pre-approving with `pie mode allow`
+- `--allow` is the only non-interactive path for untrusted/changed modes
+- Already-trusted modes (state `"allowed"` with matching hash) execute without prompts in any environment
 
 ### Validation Command Enhancement
 **`pie mode validate <name>` behavior**:
@@ -433,49 +486,32 @@ pie mode skill-creator          # Instant execution (cache hit)
 - **Security maintained**: Content verification on every access
 - **Developer workflow**: Edit → validate → instant testing
 
+### Garbage Collection
+**Dual strategy for cleaning stale cache and approval entries**:
+
+#### **Lazy Cleanup (Opportunistic)**
+- Triggered only by `pie mode list`, and only if cache/approvals file is older than 30 days (configurable)
+- Checks if cached/approved mode paths still exist, removes stale entries
+- Not performed during `pie mode <name>` execution — no cleanup overhead on the hot path
+- Lightweight — only checks path existence, no revalidation
+
+#### **Explicit Cleanup (`pie mode gc`)**
+- Full sweep of all `.cache/` files and `.approvals.json` entries
+- Checks every stored path, removes entries where the mode directory no longer exists
+- Useful for periodic cleanup or after removing many projects
+
 ## Needs Clarification
 
-### 1. ~~**Error Handling & Troubleshooting**~~ ✅ **RESOLVED**
-- Comprehensive error handling specification created
-- Covers 42 distinct error categories across 8 execution phases
-- Includes detection strategies, handling approaches, and recovery mechanisms
-- See: `specs/pie-mode/error-handling.md`
+### Initial message pass-through
+- Trailing arguments (without `--`) should be passed as an initial message to pi
+- Example: `pie mode foo this is a message` behaves like `pi this is a message`, passing "this is a message" as an initial prompt
+- Needs: Define interaction with mode-defined flags and `--` separator
 
-### 2. ~~**Debugging & Observability**~~ ✅ **RESOLVED**
-- **Verbose output levels**: Multiple verbose flags (`-v`, `-vv`, `-vvv`) for progressive detail
-- **Argument separation**: Use `--` to pass arguments to underlying pi process (e.g., `pie mode foo -- --verbose`)
-- **Active mode display**: Custom "Pie a la mode" extension shows current mode info in pi TUI
-- See: Debugging & Observability section below
-
-### 3. ~~**Conflict Resolution Details**~~ ✅ **RESOLVED**
-- **Project vs user modes**: Project modes take precedence (more specific), with warning logged about override
-- **Configuration merging**: Clear precedence order for prompt composition
-- **CLI-based prompt merging**: Uses `--system-prompt` and `--append-system-prompt` flags instead of files
-- See: Conflict Resolution section below
-
-### 4. ~~**Security & Validation**~~ ✅ **RESOLVED**
-- **Comprehensive security framework**: Trust verification, file system protection, sandbox safety
-- **Threat model analysis**: Attack scenarios and mitigation strategies identified
-- **Phased implementation plan**: MVP security through enterprise-grade features
-- See: `specs/pie-mode/security.md`
-
-### 5. ~~**Performance & Caching**~~ ✅ **RESOLVED**
-- **Hybrid discovery caching**: Fast browsing (list/show) with fresh execution data
-- **Content-based mode caching**: Pre-computed prompts, extensions, and flag variants
-- **Integrated trust system**: Content hash validation with allow/disallow commands
-- See: Performance & Caching section below
-
-### 6. **Migration & Compatibility**
-- No versioning strategy for mode format changes
-- How to handle backward compatibility if schema evolves
-- Migration path from simple configurations to modes
-
-### 7. **Cache & Configuration Storage Locations**
-- Where should performance cache files be stored? (`~/.pi/cache/modes/`? `~/.cache/pi-mode/`?)
-- Where should trust configuration be stored? (`~/.pi/trusted-modes.json`? `~/.config/pi-mode/trust.json`?)
-- Should cache respect XDG Base Directory Specification?
-- Cache cleanup strategy for unused/old modes?
-- Trust configuration backup and portability considerations?
+### Non-interactive mode flag
+- A new flag to run a mode non-interactively, requiring a message argument
+- Would pass `pi -p` under the hood
+- Example: `pie mode foo -p "refactor this function"`
+- Needs: Define flag name (`-p`/`--prompt`?), behavior when no message is provided, interaction with `--allow`
 
 ## Configuration Schema
 
@@ -483,7 +519,7 @@ The complete JSON schema for `config.json` is available at: **`specs/pie-mode/sc
 
 ### Key Schema Features:
 
-- **Required fields**: Only `name` and `description` are required
+- **Required fields**: `name`, `description`, and `schema_version` (currently `"1.0.0"`, semver format)
 - **Name validation**: Must be lowercase alphanumeric with hyphens and underscores
 - **Inline file embedding**: Any `@file_name` reference in `prompt` or `append_prompt` is replaced with file contents
 - **System prompt control**: `disable_pi_system_prompt` and `disable_pi_append_system_prompt` for full control
@@ -519,8 +555,7 @@ Use `pie mode validate <name>` to verify:
 
 ### Examples
 - Complete example available in `examples/pi_a_la_mode/skill_creator/`
-- Demonstrates project vs user configurations, flags, nono profiles, and append prompts
-- Shows practical implementation of all major features
+- Demonstrates flags, nono profiles, and append prompts
 
 ## Implementation Notes
 

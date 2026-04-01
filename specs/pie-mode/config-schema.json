@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "User-level configuration for pie mode. Stored at ~/.pi/a_la_mode/.config.json",
+  "type": "object",
+  "required": ["schema_version"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "const": "1.0.0",
+      "description": "Schema version using MAJOR.MINOR.PATCH semver. Same versioning rules as mode config.json."
+    },
+    "file_embedding_size_limit": {
+      "type": "string",
+      "default": "100KB",
+      "pattern": "^[0-9]+(B|KB|MB)$",
+      "description": "Maximum file size for inline embedding. Files exceeding this fall back to path substitution. Accepts human-readable sizes: B (bytes), KB (kilobytes), MB (megabytes)."
+    },
+    "gc_stale_age_days": {
+      "type": "integer",
+      "default": 30,
+      "minimum": 1,
+      "description": "Number of days before lazy garbage collection considers cache and approval entries stale."
+    }
+  }
+}

@@ -4,177 +4,91 @@
 
 Security considerations and validation mechanisms for the pie mode feature, covering trust verification, sandboxing, file system protection, and abuse prevention.
 
-## Current Security Concerns
+## Security Design
 
-### 1. **Mode Trust Verification System**
-**Status: Needs Implementation**
+### Trust Verification System
+**See**: `specs/pie-mode-feature.md` → Trust Integration section
 
-Similar to direnv's trust model, users should explicitly trust modes before execution.
+- Direnv-like content-based trust with three states: `allowed`, `denied`, `unknown`
+- Content hash covers ALL files in the mode directory (any change invalidates trust)
+- Approval state stored in `~/.pi/a_la_mode/.approvals.json` using `<mode-name>-<hash>` keying
+- Approvals are machine-specific, not portable across machines
+- `--allow` flag skips trust prompts; `pie mode allow --all` never overrides explicit denials
+- `pie mode disallow <name>` explicitly denies execution
 
-#### **Requirements**
-- Store content hash of modes and prompt user when content changes
-- User must explicitly trust modes before first execution  
-- Hash verification on each mode load
-- Revocation mechanism for untrusted modes
+### File System Security
+**See**: `specs/pie-mode/schema.json`, `specs/pie-mode/error-handling.md` → Phase 2/3
 
-#### **Open Questions**
-- Where are trust hashes stored? (`.pi/trusted-modes.json`?)
-- What content gets hashed? (config.json only? all files?)
-- What triggers re-verification? (any file change? config change only?)
-- Trust inheritance: do project modes automatically trust for all users?
+- `@file_name` references validated during config processing
+- Path traversal detection (canonicalize and reject escapes from mode directory)
+- Circular reference detection with depth limits
+- Binary files converted to `@/full/path/to/file` instead of inline embedding
+- **Symlinks are never followed** — if a referenced file is a symlink, reject it with a clear error. This eliminates symlink-based attacks entirely and can be relaxed later if needed.
+- **File size threshold**: 100KB default. Files exceeding this fall back to path substitution (`@/full/path/to/file`). Configurable via `pie mode config file_embedding_size_limit` (see `specs/pie-mode/config-schema.json`).
+- **Permission pre-checking**: Pre-check file read permissions before attempting embedding. Produce a clear, specific error (e.g., "Cannot read PROMPT.md: permission denied") rather than relying on OS errors.
 
-### 2. **File System Security**
-**Status: Needs Implementation**
+### Non-`@` Path Security
+The same path security principles apply to `nono_profile` and `extensions` paths specified in `config.json`:
 
-The `@file_name` embedding feature presents multiple attack vectors.
+- **Must be relative**: All paths must be relative to the mode directory. Absolute paths are rejected.
+- **No path traversal**: Canonicalize and reject paths that escape the mode directory (e.g., `../../etc/passwd`).
+- **Symlinks are never followed**: Same rule as `@file` references — reject symlinks with a clear error.
+- **Permission pre-checking**: Verify readability before passing to nono or pi.
 
-#### **Identified Risks**
-- **Path traversal attacks**: `@../../../etc/passwd`, `@~/.ssh/id_rsa`
-- **Size-based DoS**: Embedding huge files (`@/dev/zero`, large logs)
-- **Binary file disclosure**: Exposing sensitive binary files via path substitution
-- **Symlink following**: Following symlinks to restricted areas
+### Nono Profile Failure Handling
+**See**: `specs/pie-mode/error-handling.md` → Phase 4: Nono Integration
 
-#### **Open Questions**
-- Path restriction enforcement (stay within mode directory?)
-- File size limits for embedding vs path substitution
-- Symlink following policy
-- Permission checking before file access
+- Nono not installed: FATAL error with clear messaging
+- Profile validation failures: FATAL with specific error details
+- Runtime crashes: FATAL, user must fix profile or remove nono-profile.json
+- Resource limits: WARNING, continue with degraded performance
 
-### 3. **Nono Profile Security**
-**Status: Partial Implementation**
+### Code Execution Boundary
 
-Sandbox setup and failure handling needs definition.
+Pie is a thin launcher — the trust system is the security boundary.
 
-#### **Failure Scenarios**
-- Nono not installed or not in PATH
-- Profile creation/validation fails
-- Permission issues creating sandbox
-- Profile contains invalid configuration
+- Once a user has reviewed and approved a mode, pie passes extensions and CLI args to pi as-is. Extension sandboxing, validation, and signing are pi's concern.
+- Any files pie is responsible for resolving (e.g., auto-discovered extensions from `extensions/`) are validated to exist and be readable before being passed to pi. This is operational validation, not security gatekeeping.
+- `cli_args` are passed through verbatim — no sanitization. The user explicitly trusted the mode's config, which includes its CLI args.
+- Extension signing/validation is not pie's responsibility. Pi manages extension execution.
 
-#### **Open Questions**
-- Should pie mode fail gracefully or proceed without sandboxing?
-- How to handle nono installation detection?
-- Profile validation before execution?
-- Error recovery strategies for sandbox setup failures
+### Information Disclosure
 
-### 4. **Code Execution Risks**
-**Status: Needs Assessment**
+- **No sanitization in verbose output** — if the user asked for `-vvv`, they want full debug info. They're running it on their own machine for their own modes. Redacting output makes debugging harder with no real security benefit.
+- **Verbosity levels are the control** — sensitive details (environment variables, full file contents, config dumps) are naturally excluded from `-v` and `-vv` by the tiered output design (see feature spec → Verbose Output Levels). `-vvv` is explicitly "full debug" and shows everything.
+- **User responsibility** — users should be cautious when sharing `-vvv` output (e.g., in bug reports).
 
-Modes can execute arbitrary code through extensions and CLI args.
+## Deferred: Supply Chain Security (Phase 3)
 
-#### **Attack Vectors**
-- Malicious extensions (JavaScript execution)
-- Arbitrary CLI arguments passed to pi
-- Shell injection through cli_args
-- Extension loading from untrusted sources
+No verification of mode authenticity or integrity beyond the local trust model.
 
-#### **Open Questions**
-- Extension validation/signing required?
-- CLI argument sanitization needed?
-- Restriction on extension sources?
-- Mode-specific permission boundaries?
-
-### 5. **Information Disclosure**
-**Status: Needs Policy**
-
-Verbose modes and discovery could leak sensitive information.
-
-#### **Disclosure Risks**
-- Verbose logs exposing directory structure
-- Config content in debug output (API keys, paths)
-- Environment variable leakage (`PIE_MODE_*`)
-- Discovery revealing private directory contents
-
-#### **Open Questions**
-- What information should be sanitized in logs?
-- Config field redaction policy?
-- Directory traversal disclosure limits?
-- Environment variable security boundaries?
-
-### 6. **Supply Chain Security** 
-**Status: Needs Framework**
-
-No verification of mode authenticity or integrity.
-
-#### **Current Gaps**
+### Current Gaps
 - No mode signing or verification
-- User and project modes can be tampered with
+- User and project modes can be tampered with (trust system detects changes but doesn't verify origin)
 - No distribution security model
 - No update/versioning security
 
-#### **Open Questions**
+### Future Questions
 - Mode signing required for distribution?
 - Checksum verification for shared modes?
 - Repository trust model needed?
-- Version integrity verification?
-
-## Proposed Security Framework
-
-### **Phase 1: Immediate Security (MVP)**
-Essential security measures for initial release:
-
-1. **File Path Restrictions**
-   - Enforce mode directory boundaries for `@file_name` references
-   - Path traversal prevention
-   - Symlink resolution controls
-
-2. **Basic Trust Model**
-   - Simple hash-based trust verification  
-   - User confirmation for new/changed modes
-   - Trust persistence in `.pi/trusted-modes.json`
-
-3. **Nono Integration Safety**
-   - Graceful fallback when nono unavailable
-   - Profile validation before execution
-   - Clear error messages for sandbox failures
-
-### **Phase 2: Enhanced Security**
-Additional security measures for production use:
-
-1. **Extension Security**
-   - Extension origin validation
-   - Signature verification for distributed extensions
-   - Sandboxed extension execution
-
-2. **Advanced Trust Model**
-   - Content-addressable trust (hash entire mode directory)
-   - Trust inheritance policies
-   - Revocation and blocklist support
-
-3. **Audit & Monitoring**
-   - Security event logging
-   - Mode usage tracking
-   - Anomaly detection
-
-### **Phase 3: Enterprise Security**
-Full security framework for enterprise environments:
-
-1. **Supply Chain Security**
-   - Mode signing and distribution framework
-   - Repository trust and verification
-   - Update integrity verification
-
-2. **Policy Enforcement**
-   - Organization-wide mode policies
-   - Centralized trust management  
-   - Compliance reporting
 
 ## Implementation Priorities
 
-### **High Priority (Phase 1)**
-- [ ] File system path restrictions
-- [ ] Basic mode trust verification
-- [ ] Nono profile failure handling
-- [ ] Information disclosure prevention in logs
+### **Phase 1: MVP Security**
+- [ ] File system path restriction enforcement
+- [ ] Symlink rejection enforcement
+- [ ] File size threshold enforcement (100KB default)
+- [ ] Permission pre-checking enforcement
 
-### **Medium Priority (Phase 2)**  
-- [ ] Extension security validation
-- [ ] Advanced trust model
+### **Phase 2: Enhanced Security**
 - [ ] Security event logging
+- [ ] Log/output redaction policy (if user demand arises)
 
-### **Lower Priority (Phase 3)**
+### **Phase 3: Enterprise Security**
 - [ ] Supply chain security framework
-- [ ] Enterprise policy enforcement
+- [ ] Mode signing and distribution
+- [ ] Organization-wide mode policies
 - [ ] Compliance and audit features
 
 ## Threat Model
@@ -187,7 +101,7 @@ Full security framework for enterprise environments:
 3. Mode reads sensitive files (SSH keys, credentials)
 4. Information exfiltrated via prompt content
 
-**Mitigation**: Path restrictions, trust verification, content sanitization
+**Mitigation**: Path restrictions, symlink rejection, trust verification, permission pre-checking
 
 #### **Extension Injection Attack**
 1. Attacker modifies project mode to include malicious extension
@@ -195,7 +109,7 @@ Full security framework for enterprise environments:
 3. Extension runs with user permissions when mode loads
 4. System compromise via JavaScript execution
 
-**Mitigation**: Extension validation, sandboxing, trust verification
+**Mitigation**: Trust verification detects file changes, pi manages extension execution security
 
 #### **Sandbox Bypass Attack**
 1. User creates mode with nono profile
@@ -203,7 +117,7 @@ Full security framework for enterprise environments:
 3. Mode appears sandboxed but has elevated access
 4. Privilege escalation via profile manipulation
 
-**Mitigation**: Profile validation, integrity checking, trust verification
+**Mitigation**: Trust verification detects profile changes, profile validation before execution
 
 ## Security Guidelines
 
@@ -223,11 +137,12 @@ Full security framework for enterprise environments:
 
 ### **For Pie Mode Implementation**
 - Validate all file paths before resolution
-- Sanitize sensitive information in logs and errors
+- Pre-check permissions before file access
+- Reject symlinks in `@` references
 - Implement fail-safe defaults for security features
 - Provide clear security status indicators
 - Document security assumptions and limitations
 
 ---
 
-*This security analysis is a work in progress and will be updated as threats and mitigations are refined.*
+*This security analysis will be updated as the supply chain security framework is designed.*

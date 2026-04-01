@@ -233,6 +233,31 @@ Errors are classified by **Phase** (when they occur) and **Severity** (impact le
 - **Handling**: Report maximum depth exceeded with reference chain
 - **Recovery**: User reduces reference nesting depth
 
+### Pie State File Corruption
+
+Pie's own state files (`~/.pi/a_la_mode/`) are not user-edited — they are managed by pie. Corruption is treated as recoverable by regeneration.
+
+#### Corrupted `.approvals.json`
+- **Error**: Invalid JSON or unexpected schema in approvals file
+- **Severity**: WARNING
+- **Detection**: JSON parse or schema validation failure on load
+- **Handling**: Log warning, delete corrupted file, start with empty approvals (all modes become `unknown`)
+- **Recovery**: Automatic — users re-approve modes on next execution
+
+#### Corrupted `.cache/*.json`
+- **Error**: Invalid JSON or unexpected schema in cache files
+- **Severity**: INFO
+- **Detection**: JSON parse or schema validation failure on cache read
+- **Handling**: Delete corrupted cache file(s), recompute on next access
+- **Recovery**: Automatic — cache is regenerated from mode source files
+
+#### Corrupted `.config.json`
+- **Error**: Invalid JSON or unexpected schema in user config
+- **Severity**: WARNING
+- **Detection**: JSON parse or schema validation failure on load
+- **Handling**: Log warning with path to corrupted file, fall back to defaults
+- **Recovery**: User deletes or fixes `.config.json`, or runs `pie mode config <key> --reset`
+
 ## Phase 3: Content Validation & Security
 
 ### PROMPT.md Issues
@@ -265,13 +290,6 @@ Errors are classified by **Phase** (when they occur) and **Severity** (impact le
 - **Handling**: Report size limit exceeded
 - **Recovery**: User reduces prompt size
 
-#### Malicious Prompt Content
-- **Error**: Attempts to override security, social engineering, prompt injection
-- **Severity**: WARNING
-- **Detection**: Content analysis for suspicious patterns
-- **Handling**: Warn about potentially malicious content
-- **Recovery**: Continue with warning or user confirmation
-
 ### Extension Validation
 
 #### Extension Directory Issues
@@ -282,11 +300,11 @@ Errors are classified by **Phase** (when they occur) and **Severity** (impact le
 - **Recovery**: Skip extensions, mode continues
 
 #### Extension File Problems
-- **Error**: Corrupted files, invalid formats, malicious code
+- **Error**: Unreadable files, permission denied, broken symlinks
 - **Severity**: WARNING
-- **Detection**: Extension file validation
-- **Handling**: Skip problematic extensions with warnings
-- **Recovery**: Load remaining valid extensions
+- **Detection**: File existence and readability check (operational validation only — content validation is pi's concern)
+- **Handling**: Skip unresolvable extensions with warnings
+- **Recovery**: Pass remaining valid extension paths to pi
 
 #### Extension Discovery Failures
 - **Error**: Glob pattern fails, too many extensions
@@ -301,10 +319,10 @@ Errors are classified by **Phase** (when they occur) and **Severity** (impact le
 
 #### Nono Command Not Found
 - **Error**: Not installed or not in PATH
-- **Severity**: FATAL (if nono required), WARNING (if optional)
+- **Severity**: FATAL
 - **Detection**: Command existence check
-- **Handling**: Report missing nono, suggest installation or disable sandboxing
-- **Recovery**: Run without sandbox or user installs nono
+- **Handling**: Report missing nono with installation instructions
+- **Recovery**: User installs nono or removes nono-profile.json from mode
 
 #### Nono Version Incompatibility
 - **Error**: Older version lacking required features
@@ -343,14 +361,14 @@ Errors are classified by **Phase** (when they occur) and **Severity** (impact le
 - **Severity**: FATAL
 - **Detection**: Process spawn error handling
 - **Handling**: Report startup failure with nono error details
-- **Recovery**: Run without sandbox
+- **Recovery**: User fixes nono installation or profile
 
 #### Nono Runtime Crashes
 - **Error**: Process dies during execution
 - **Severity**: FATAL
 - **Detection**: Process monitoring and exit code handling
 - **Handling**: Report crash details and suggest profile fixes
-- **Recovery**: Restart without sandbox
+- **Recovery**: User fixes profile or removes nono-profile.json from mode
 
 #### Resource Limits
 - **Error**: Nono hits memory/CPU/file limits
@@ -383,22 +401,6 @@ Errors are classified by **Phase** (when they occur) and **Severity** (impact le
 - **Detection**: Config validation before pi startup
 - **Handling**: Warn about conflicts and show resolution options
 - **Recovery**: Override with mode config or merge intelligently
-
-### APPEND_SYSTEM Mechanism
-
-#### Multiple APPEND_SYSTEM Sources
-- **Error**: Both project and global APPEND_SYSTEM.md exist
-- **Severity**: WARNING
-- **Detection**: Check for existing APPEND_SYSTEM files
-- **Handling**: Warn about conflicts and show merge strategy
-- **Recovery**: Use precedence rules or merge content
-
-#### APPEND_SYSTEM Failures
-- **Error**: Can't write temporary APPEND_SYSTEM file
-- **Severity**: FATAL
-- **Detection**: File creation error handling
-- **Handling**: Report write failure reasons
-- **Recovery**: Use alternative prompt injection methods
 
 ### Extension Loading
 
@@ -443,19 +445,12 @@ Errors are classified by **Phase** (when they occur) and **Severity** (impact le
 
 ### Concurrency Issues
 
-#### Multiple Mode Instances
-- **Error**: User runs multiple pie modes simultaneously
-- **Severity**: WARNING
-- **Detection**: Process/lock file detection
-- **Handling**: Warn about concurrent execution
-- **Recovery**: Allow with warnings or queue execution
+Concurrent access to pie's state files (`.approvals.json`, `.cache/*.json`, `.config.json`) is handled pragmatically:
 
-#### File Locking Conflicts
-- **Error**: Modes compete for same files
-- **Severity**: WARNING
-- **Detection**: File lock conflict detection
-- **Handling**: Report lock conflicts and suggest resolution
-- **Recovery**: Wait for locks or use alternative files
+- **Write strategy**: Atomic writes via write-to-temp-then-rename. This prevents partial/corrupted files from concurrent operations.
+- **Last write wins**: No locking. Simultaneous `allow` or `gc` in separate shells may overwrite each other's changes. This is acceptable — the affected operations are idempotent and infrequent.
+- **Cache files**: No concurrency concern — each cache file is keyed to a specific mode and written atomically.
+- **Multiple mode executions**: Running multiple `pie mode` instances simultaneously is fully supported — they read config at startup and don't hold state files open.
 
 ### Environment Issues
 
@@ -491,9 +486,9 @@ Note: Interactive mode execution and memory management are out of scope for pie.
 #### Error Message Security
 - **Error**: Errors leak sensitive information
 - **Severity**: WARNING
-- **Detection**: Error message content analysis
-- **Handling**: Sanitize error messages before display
-- **Recovery**: Show sanitized errors with option for detailed logs
+- **Detection**: Verbosity tiers naturally exclude sensitive details from `-v` and `-vv`
+- **Handling**: `-vvv` shows full debug info unsanitized (user's machine, user's modes)
+- **Recovery**: Users should be cautious when sharing `-vvv` output (e.g., in bug reports)
 
 #### Error Message Clarity
 - **Error**: Users can't understand what went wrong
@@ -559,8 +554,7 @@ Note: Interactive mode execution and memory management are out of scope for pie.
 ### Error Detection Framework
 - Comprehensive validation at each phase boundary
 - Resource monitoring throughout execution
-- Security scanning for malicious content
-- User input sanitization and validation
+- User input validation
 
 ### Error Reporting Framework
 - Structured error codes and categories
