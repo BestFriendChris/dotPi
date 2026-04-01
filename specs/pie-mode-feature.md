@@ -89,10 +89,10 @@ Examples:
 - **Discovery order**: Project → Global → Direct path
 
 ### Commands
-- `pie mode [-v|-vv|-vvv] <mode-name> [--allow] [<mode-flags>...] [-- <pi-args>...]` - Launch pi with specified mode, optional mode-defined flags, and optional pi arguments
-- `pie mode list [-v|-vv|-vvv]` - List all discoverable modes with descriptions, separated by project/user sections
+- `pie mode [-v|-vv|-vvv] <mode-name>[.<flavor>] [--allow] [-- <pi-args>...]` - Launch pi with specified mode, optional flavor variant, and optional pi arguments
+- `pie mode list [-v|-vv|-vvv] [--format json]` - List all discoverable modes with descriptions, separated by project/user sections (see List Command Output below)
 - `pie mode create [-v|-vv|-vvv] (-u) <name>` - Create new modes using specialized mode-creation mode, with validation against reserved command names
-- `pie mode show [-v|-vv|-vvv] (-u) <name|path>` - Show mode details (description, location, flags). `-u`/`--user` shows only user modes
+- `pie mode show [-v|-vv|-vvv] [--format json] (-u) <name|path>` - Show mode details with tiered verbosity (see Show Command Output below). `--format json` for structured output. `-u`/`--user` shows only user modes
 - `pie mode validate [-v|-vv|-vvv] (-u) <name|path>` - Validate mode directory structure, config.json schema compliance, and file reference integrity
 - `pie mode allow [-v|-vv|-vvv] [-f|--force] <name|path>` - Explicitly trust and allow a single mode
 - `pie mode allow [-v|-vv|-vvv] [-f|--force] --all [<directory>]` - Bulk approve all modes in a directory (does not override explicit denials). `-f`/`--force` skips confirmation prompt
@@ -103,6 +103,134 @@ Examples:
 - `pie mode config <key> <value>` - Set a configuration value
 - `pie mode config <key> --reset` - Reset a setting to its default
 
+### List Command Output
+
+The `list` command displays tiered mode listings grouped by source (project/user). Default output is human-readable; `--format json` produces a single JSON object to stdout with the same field sets.
+
+#### Trust Icons (all levels)
+- `✓` allowed
+- `?` unknown
+- `✗` denied
+- `⚠` validation error (mode is broken/invalid)
+
+#### Default (no verbosity flags)
+Compact listing. One line per mode: trust icon, name, description. No flavor, extension, or nono information — use `show` for that detail.
+
+```
+Project modes:
+  ✓ skill-creator     Create new pi skills
+  ? code-reviewer     Code review and quality analysis
+
+User modes:
+  ✓ spec-writer       Write project specifications
+  ✗ untrusted-mode    Experimental mode
+  ⚠ broken-mode       (invalid: missing required field "description")
+```
+
+- Sections with no modes are omitted entirely
+- Invalid modes show the validation error in parentheses in place of the description
+
+#### `-v` (Basic)
+Adds compact metadata indicators after description, separated by ` · `.
+
+```
+  ✓ skill-creator     Create new pi skills             2 flavors · 🔒 · 3 ext
+  ? code-reviewer     Code review and quality analysis  1 ext
+```
+
+- `N flavors` — flavor count
+- `🔒` — nono profile active
+- `N ext` — extension count
+- Indicators omitted when nothing to show
+
+#### `-vv` (Detailed)
+Expands flavors as tree children with parenthetical explanations for all icons and states.
+
+```
+  ✓ skill-creator — Create new pi skills (allowed, 🔒 sandboxed)
+    ├── user — Create skills in user directory (default)
+    └── minimal — Minimal skill template
+
+  ✗ untrusted-mode — Experimental mode (denied)
+    ├── safe — Run without network (default)
+    └── full — Full access
+
+  ⚠ broken-mode (invalid: missing required field "description")
+```
+
+- All icons get parenthetical explanations: `(allowed)`, `(unknown)`, `(denied)`, `(invalid: <reason>)`
+- `🔒 sandboxed` in the mode's parenthetical if nono profile active
+- `(default)` after the default flavor
+- `(flavor required)` appended to mode parenthetical when `require_flavor` is true
+- Tree markers: `├──` for non-last, `└──` for last flavor
+- Blank line between modes for readability
+
+#### `-vvv` (Debug)
+All `-vv` content plus mode paths and flavor override keys. Not a full config dump — prompt content, extension paths, nono profile details, and cache state belong to `show`.
+
+```
+  ✓ skill-creator — Create new pi skills (allowed, 🔒 sandboxed)
+    .pi/a_la_mode/skill-creator
+    ├── user — Create skills in user directory (default)
+    │   overrides: nono_profile, append_prompt
+    └── minimal — Minimal skill template
+        overrides: extensions
+```
+
+Adds to `-vv`:
+- Mode directory path (relative for project modes, absolute for user modes)
+- Flavor `override_config` keys listed per flavor (which fields, not the values)
+
+#### `--format json`
+Structured JSON to stdout. Verbosity tier controls field depth (same pattern as `show`).
+
+#### Behavior
+- `-u`/`--user` restricts to user modes only (omits project section)
+- Modes that fail validation are always shown with `⚠` and the error — never hidden
+- Sections with no modes are omitted
+- Uses discovery cache for speed (as specified in the caching section)
+
+### Show Command Output
+
+The `show` command displays tiered mode information. Default output is human-readable; `--format json` produces a single JSON object to stdout with the same field sets.
+
+#### Default (no verbosity flags)
+Quick summary card:
+- Name, description, source location (project/user/direct)
+- Trust state (allowed/denied/unknown + content hash match)
+- Flavors listed with names, aliases, descriptions; notes `require_flavor` / `default_flavor` if set
+- Nono profile status (enabled → path, disabled, or not configured)
+- Extension summary (count + discovery mode)
+
+#### `-v` (Basic)
+All default output plus config-level detail:
+- Prompt source reference (e.g. `@PROMPT.md`, not the full text)
+- Append prompt source reference
+- `disable_pi_system_prompt` / `disable_pi_append_system_prompt` if `true`
+- Explicit `cli_args` list
+- Extension paths (pre-glob)
+- Flavor `override_config` keys (which fields each flavor overrides, not the values)
+
+#### `-vv` (Detailed)
+All `-v` output plus resolved content:
+- Full prompt content (with `@file` embeddings resolved)
+- Extension paths after glob expansion
+- Flavor override values
+- Nono profile summary (key permissions/constraints)
+
+#### `-vvv` (Full Debug)
+All `-vv` output plus:
+- Raw `config.json` content
+- Full nono profile JSON
+- Complete file embedding resolution chain
+- Cache state (hit/miss, hash, cached_at)
+
+#### `--format json`
+Structured JSON output to stdout. Available at all verbosity levels — the verbosity tier controls how much data is included in the JSON (same field sets as above). Intended for scripting, editor integrations, and tooling.
+
+#### Error Behavior
+If the mode fails validation, `show` still displays what it can and appends validation errors at the end (rather than refusing to show anything). This makes it a useful debugging tool. Modes that don't exist produce a FATAL error.
+
 #### Global Flags
 - `-v, --verbose` - Basic verbose output (mode discovery, selection, execution)
 - `-vv` - Detailed verbose output (config parsing, file resolution, extension discovery)
@@ -110,12 +238,19 @@ Examples:
 - `-u, --user` - Operate on user modes only (in `~/.pi/a_la_mode/`)
 - `--allow` - Skip trust prompts and auto-allow modes (execution command only)
 
-#### Mode-Defined Flags
-- Mode-specific flags are defined in `config.json` under the `flags` key
-- Mode flags are placed after `<mode-name>` and before `--`
-- Example: `pie mode skill-creator --global -- --verbose`
-- **Reserved flags**: Mode flags must not collide with global flags (`-v`, `--verbose`, `-u`, `--user`, `--allow`, `-f`, `--force`, `--all`, `--reset`)
-- **Collision detection**: `pie mode validate` checks for reserved flag collisions and reports errors
+#### Flavors
+- Named mode variants defined in `config.json` under the `flavors` key
+- Selected via dot notation after the mode name: `pie mode <mode-name>.<flavor>`
+- Only one flavor can be active at a time
+- Example: `pie mode skill-creator.user -- --verbose`
+- Flavors may define `aliases` for shorter names (e.g., `pie mode skill-creator.u`)
+- All flavor names and aliases must be unique across the mode's `flavors` object
+- `require_flavor: true` in config makes a flavor mandatory — bare invocation prints help listing available flavors with descriptions. FATAL validation error if `require_flavor` is `true` but no `flavors` are defined
+- `default_flavor` in config specifies which flavor to use when none is given
+- `default_flavor` must reference a flavor key name (not an alias); validated at load time
+- Parsing: split on first `.` — safe because mode names use `^[a-z0-9_-]+$` (no dots)
+- Flavor names and aliases follow the same `^[a-z0-9_-]+$` pattern
+- No collision with global flags — flavors use dot notation, not `--` prefix
 
 #### Argument Separation
 - Use `--` to separate pie mode arguments from pi arguments
@@ -334,10 +469,10 @@ done | sha256sum
 #### **Pre-Computed Cache Contents**
 **One cache file per mode containing**:
 - **Fully embedded prompts**: All `@file_name` references resolved
-- **All flag configurations**: Every flag variant pre-processed
+- **All flavor configurations**: Every flavor variant pre-processed
 - **Validated extensions**: Checked paths and loading order
 - **Processed nono profiles**: Ready-to-execute sandbox configuration
-- **Complete CLI arguments**: All mode and flag arguments resolved
+- **Complete CLI arguments**: All mode and flavor arguments resolved
 
 Cache files are stored in `~/.pi/a_la_mode/.cache/` using a `<mode-name>-<hash>.json` naming scheme, where `<hash>` is a truncated hash of the mode's full path. This avoids collisions between project and user modes with the same name.
 
@@ -360,8 +495,8 @@ Cache files are stored in `~/.pi/a_la_mode/.cache/` using a `<mode-name>-<hash>.
     "extensions": ["/full/path/to/ext1.js"],
     "cli_args": ["--model", "claude-3.5-sonnet"]
   },
-  "flag_configs": {
-    "--secure": {
+  "flavor_configs": {
+    "secure": {
       "nono_profile_path": "/path/to/secure-profile.json",
       "extensions": []
     }
@@ -460,7 +595,7 @@ pie mode skill-creator
 ### Validation Command Enhancement
 **`pie mode validate <name>` behavior**:
 - **Always** performs full recompute (no cache shortcuts)
-- **Processes** all file embedding and flag variants
+- **Processes** all file embedding and flavor variants
 - **Updates** performance cache with complete data
 - **Updates** content hash for trust verification
 - **Never** changes trust state (use `allow`/`disallow`)
@@ -505,7 +640,7 @@ pie mode skill-creator          # Instant execution (cache hit)
 ### Initial message pass-through
 - Trailing arguments (without `--`) should be passed as an initial message to pi
 - Example: `pie mode foo this is a message` behaves like `pi this is a message`, passing "this is a message" as an initial prompt
-- Needs: Define interaction with mode-defined flags and `--` separator
+- Needs: Define interaction with `--` separator (flavor selection via dot notation eliminates flag/message ambiguity)
 
 ### Non-interactive mode flag
 - A new flag to run a mode non-interactively, requiring a message argument
@@ -526,7 +661,7 @@ The complete JSON schema for `config.json` is available at: **`specs/pie-mode/sc
 - **File type handling**: Plain text files embedded inline; binary files become `@/full/path/to/file`
 - **Recursive embedding**: Referenced files can contain their own `@file_name` references (with circular detection)
 - **Extension management**: Auto-discovery from `extensions/` directory or explicit control
-- **Custom flags**: Mode-specific flags with configuration overrides
+- **Flavors**: Named mode variants with configuration overrides, selected via dot notation
 - **Strict validation**: `additionalProperties: false` prevents typos and undefined fields
 
 ### Schema Validation
@@ -555,7 +690,7 @@ Use `pie mode validate <name>` to verify:
 
 ### Examples
 - Complete example available in `examples/pi_a_la_mode/skill_creator/`
-- Demonstrates flags, nono profiles, and append prompts
+- Demonstrates flavors, nono profiles, and append prompts
 
 ## Implementation Notes
 

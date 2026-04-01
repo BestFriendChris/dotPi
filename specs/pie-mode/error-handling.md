@@ -183,7 +183,7 @@ Errors are classified by **Phase** (when they occur) and **Severity** (impact le
 - **Recovery**: User fixes config according to schema
 
 #### Logical Inconsistencies
-- **Error**: Flag overrides reference non-existent fields, circular references
+- **Error**: Flavor overrides reference non-existent fields, circular references
 - **Severity**: FATAL
 - **Detection**: Post-parse validation of references and logic
 - **Handling**: Report specific logical errors

@@ -62,35 +62,39 @@
       },
       "description": "Additional CLI arguments to pass to pi command"
     },
-    "flags": {
+    "require_flavor": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, a flavor must be active. Bare invocation without a flavor prints help listing available flavors with descriptions. Top-level prompt is not required when enabled but can still be defined as a shared base prompt for all flavors. FATAL validation error if true but no flavors are defined."
+    },
+    "default_flavor": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "description": "Flavor to use when none is specified via dot notation. Must reference a key in the flavors object (not an alias). Validated at load time."
+    },
+    "flavors": {
       "type": "object",
       "additionalProperties": {
         "type": "object",
         "required": ["description"],
-        "anyOf": [
-          {"required": ["short"]},
-          {"required": ["long"]}
-        ],
         "additionalProperties": false,
         "properties": {
-          "short": {
-            "type": "string",
-            "pattern": "^[a-zA-Z]$",
-            "description": "Single character short flag"
-          },
-          "long": {
-            "type": "string",
-            "pattern": "^[a-z-]+$",
-            "description": "Long flag name (lowercase with hyphens)"
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]+$"
+            },
+            "description": "Shorter alternative names for this flavor. All aliases must be unique across all flavor names and aliases in the mode."
           },
           "description": {
             "type": "string",
-            "description": "Human-readable description of the flag"
+            "description": "Human-readable description of the flavor"
           },
           "override_config": {
             "type": "object",
             "additionalProperties": false,
-            "description": "Configuration overrides when this flag is used",
+            "description": "Configuration overrides when this flavor is active",
             "properties": {
               "nono_profile": {
                 "type": ["string", "null"],
@@ -134,7 +138,7 @@
           }
         }
       },
-      "description": "Command-line flags supported by this mode"
+      "description": "Named mode variants selected via dot notation (e.g., mode-name.flavor). Only one flavor can be active at a time."
     }
   }
 }
